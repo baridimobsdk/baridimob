@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-cjs/
+build/
+coverage/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local credentials / user data
+*.local.json
+
+# Logs & artifacts
+*.log
+.tmp/
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Package tarballs
+*.tgz
+
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Not published: tests, CI, internal notes and experiments
+typescript/test/
+python/tests/
+.github/
+docs/
+experiments/
+tools/
+*.local.md

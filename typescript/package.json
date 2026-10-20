@@ -1,0 +1,64 @@
+{
+  "name": "baridimob",
+  "version": "0.1.0",
+  "description": "Open-source TypeScript SDK for BaridiMob (Algérie Poste) — accounts, payments, transfers",
+  "keywords": [
+    "baridimob",
+    "baridimob-sdk",
+    "algerie-poste",
+    "ccp",
+    "payment",
+    "sdk",
+    "algeria"
+  ],
+  "author": "BaridiMob SDK contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/baridimobsdk/baridimob.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://github.com/baridimobsdk/baridimob",
+  "bugs": {
+    "url": "https://github.com/baridimobsdk/baridimob/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "./dist-cjs/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist-cjs/index.d.ts",
+        "default": "./dist-cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "dist-cjs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc -p tsconfig.build.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/write-cjs-package.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

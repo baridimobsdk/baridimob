@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128" role="img" aria-label="baridimob">
+  <g transform="translate(64 64) skewX(-12) translate(-64 -64)" fill="none" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M36 86 V30 a16 16 0 0 1 16 -16 H76" stroke="#F9CA0A"/>
+    <path d="M92 42 V98 a16 16 0 0 1 -16 16 H52" stroke="#134C99"/>
+  </g>
+</svg>
