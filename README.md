@@ -7,7 +7,7 @@
 
 <br>
 
-Read your CCP accounts, verify incoming payments, send transfers and pay bills from your own code.
+Read your BaridiMob accounts, verify incoming payments, send transfers and pay bills from your own code.
 
 [![npm](https://img.shields.io/npm/v/baridimob?label=npm)](https://www.npmjs.com/package/baridimob)
 [![PyPI](https://img.shields.io/pypi/v/baridimob?label=PyPI)](https://pypi.org/project/baridimob/)
@@ -33,7 +33,7 @@ The SDK is available for two languages. Both expose the same features with the s
 | **Login** | Sign in with your BaridiMob credentials. The device is confirmed once by SMS, then reused. |
 | **Accounts** | List accounts, read the balance, browse the full transaction history. |
 | **Payment verification** | Confirm that a customer's transfer has really arrived, by reference number and amount. |
-| **Transfers** | Send money to another CCP account (always confirmed by SMS code). |
+| **Transfers** | Send money to another account (always confirmed by SMS code). |
 | **Bill payments** | Mobile top-up (Mobilis, Djezzy, Ooredoo), Algérie Télécom and other billers. |
 | **Receipts** | List recent operations and download their PDF receipts. |
 

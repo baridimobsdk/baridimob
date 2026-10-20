@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/baridimob)](https://pypi.org/project/baridimob/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/baridimobsdk/baridimob/blob/main/LICENSE)
 
-Read your CCP accounts, verify incoming payments, send transfers and pay bills from Python.
+Read your BaridiMob accounts, verify incoming payments, send transfers and pay bills from Python.
 
 - One dependency: `httpx`
 - Fully typed (dataclasses)
@@ -105,7 +105,7 @@ Each `Transaction` contains `amount` (positive = incoming, negative = outgoing),
 
 ## Verify an incoming payment
 
-Useful for shops and services that accept payment by CCP transfer. The customer gives you the transfer's reference number, and you check that the money has really arrived.
+Useful for shops and services that accept payment by BaridiMob transfer. The customer gives you the transfer's reference number, and you check that the money has really arrived.
 
 ```python
 check = bm.payments.verify_payment(
