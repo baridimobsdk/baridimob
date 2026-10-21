@@ -8,7 +8,7 @@
 
 Read your BaridiMob accounts, verify incoming payments, send transfers and pay bills from Python.
 
-- One dependency: `httpx`
+- Two dependencies: `httpx` and `cryptography`
 - Fully typed (dataclasses)
 - Automatic session renewal
 
