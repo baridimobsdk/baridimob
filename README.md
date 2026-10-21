@@ -11,6 +11,7 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 
 [![npm](https://img.shields.io/npm/v/baridimob?label=npm)](https://www.npmjs.com/package/baridimob)
 [![PyPI](https://img.shields.io/pypi/v/baridimob?label=PyPI)](https://pypi.org/project/baridimob/)
+[![pub.dev](https://img.shields.io/pub/v/baridimob?label=pub.dev)](https://pub.dev/packages/baridimob)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>
@@ -19,12 +20,13 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 
 ## Packages
 
-The SDK is available for two languages. Both expose the same features with the same names.
+The SDK is available for three languages. All of them expose the same features with the same names.
 
 | Language | Install | Documentation |
 |----------|---------|---------------|
 | **TypeScript / JavaScript** | `npm install baridimob` | [typescript/README.md](typescript/README.md) |
 | **Python** | `pip install baridimob` | [python/README.md](python/README.md) |
+| **Dart / Flutter** | `flutter pub add baridimob` | [dart/README.md](dart/README.md) |
 
 ## What you can do
 
@@ -61,6 +63,17 @@ bm.auth.login("your-login", "your-password")
 balance = bm.accounts.balance()
 ```
 
+**Dart / Flutter**
+
+```dart
+import 'package:baridimob/baridimob.dart';
+
+final bm = BaridiMob(storage: FileStorage('session.json'));
+await bm.auth.login(login: 'your-login', password: 'your-password');
+
+final balance = await bm.accounts.balance();
+```
+
 The first login on a new machine asks for an SMS code. See each package's documentation for the full flow.
 
 ## Repository layout
@@ -68,6 +81,7 @@ The first login on a new machine asks for an SMS code. See each package's docume
 ```
 typescript/   npm package "baridimob"
 python/       PyPI package "baridimob"
+dart/         pub.dev package "baridimob" (Dart and Flutter)
 ```
 
 ## Security

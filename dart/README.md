@@ -1,0 +1,324 @@
+# baridimob
+
+**Unofficial Dart and Flutter SDK for BaridiMob — Algérie Poste (بريد الجزائر)**
+
+[![pub package](https://img.shields.io/pub/v/baridimob)](https://pub.dev/packages/baridimob)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/baridimobsdk/baridimob/blob/main/LICENSE)
+
+Read your BaridiMob accounts, verify incoming payments, send transfers and pay bills from Dart and Flutter.
+
+- Works in Flutter apps (Android, iOS, macOS, Windows, Linux) and in Dart servers and scripts
+- Fully typed, documented API
+- Automatic session renewal
+- Same API and session format as the [TypeScript](https://www.npmjs.com/package/baridimob) and [Python](https://pypi.org/project/baridimob/) SDKs
+
+> **Status:** version 0.x — the API may still change between minor versions.
+
+---
+
+## Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [How login works](#how-login-works)
+- [Accounts and history](#accounts-and-history)
+- [Verify an incoming payment](#verify-an-incoming-payment)
+- [Transfers](#transfers)
+- [Bill payments](#bill-payments)
+- [Receipts and profile](#receipts-and-profile)
+- [Session storage](#session-storage)
+- [Configuration](#configuration)
+- [Error handling](#error-handling)
+- [Platform support](#platform-support)
+- [Security](#security)
+
+---
+
+## Installation
+
+```bash
+flutter pub add baridimob   # Flutter app
+dart pub add baridimob      # Dart server or script
+```
+
+Requires **Dart 3.4 or later** (Flutter 3.22 or later).
+
+## Quick start
+
+```dart
+import 'package:baridimob/baridimob.dart';
+
+final bm = BaridiMob(storage: FileStorage('.baridimob/session.json'));
+
+// 1. Log in
+final result = await bm.auth.login(login: 'your-login', password: 'your-password');
+
+// 2. First time on this device only: confirm it by SMS
+if (result.isOtpRequired) {
+  await bm.auth.requestDeviceOtp();          // an SMS code is sent to your phone
+  await bm.auth.confirmDevice('123456');     // the code you received
+}
+
+// 3. Use the API
+final accounts = await bm.accounts.list();
+print('${accounts.first.number}: ${accounts.first.balance}');
+```
+
+A complete command-line example is in [`example/example.dart`](example/example.dart).
+
+## How login works
+
+1. **First login on a device:** BaridiMob asks to confirm the new device. `login()` returns a result with `isOtpRequired == true`. Call `requestDeviceOtp()`, then `confirmDevice(code)` with the SMS code.
+2. **The device keys and session are saved** in the storage you provide.
+3. **Next logins** reuse the saved device. No SMS is needed.
+4. **When the session expires**, the SDK logs in again automatically and retries the request.
+
+The first login generates an RSA key pair for the device. This runs in a background isolate, so your Flutter UI stays responsive.
+
+```dart
+bm.auth.currentDeviceId;   // the registered device id, or null
+await bm.auth.logout();    // ends the session and deletes the saved device:
+                           // the next login will ask for an SMS code again
+```
+
+## Accounts and history
+
+```dart
+final accounts = await bm.accounts.list();          // all accounts
+final account  = await bm.accounts.get(accounts.first.id);
+final balance  = await bm.accounts.balance();       // balance of the first account
+```
+
+**Transaction history**
+
+```dart
+// One page
+final page = await bm.accounts.transactions(
+  account: account.number,
+  from: DateTime(2026, 1, 1),
+  to: DateTime.now(),
+  page: 1,
+);
+
+// All pages at once
+final all = await bm.accounts.allTransactions(account: account.number, from: DateTime(2026, 1, 1));
+
+// Stream page by page (memory-friendly)
+await for (final tx in bm.accounts.iterTransactions(account: account.number)) {
+  print('${tx.date} ${tx.amount} ${tx.description}');
+}
+
+// Find one transaction by its reference number
+final tx = await bm.accounts.findTransaction(account: account.number, refNum: '012345678901');
+```
+
+Each `Transaction` contains `amount` (positive = incoming, negative = outgoing), `currency`, `description`, `date` (UTC), `fee`, `refNum`, and the original server data in `raw`.
+
+Dates are sent to the server as calendar days in Algeria time: `DateTime(2026, 1, 31)` always means January 31.
+
+## Verify an incoming payment
+
+Useful for shops and services that accept payment by BaridiMob transfer. The customer gives you the transfer's reference number, and you check that the money has really arrived.
+
+```dart
+final check = await bm.payments.verifyPayment(
+  refNum: '012345678901',  // reference number given by the customer
+  amount: 2500,            // expected amount (optional)
+);
+
+if (check.verified) {
+  // payment received: deliver the order
+} else {
+  print(check.reason);
+}
+```
+
+| `reason` | Meaning |
+|----------|---------|
+| `VerifyPaymentReason.ok` | Payment found, incoming, and the amount matches |
+| `VerifyPaymentReason.notFound` | No transaction with this reference number |
+| `VerifyPaymentReason.notIncoming` | The transaction exists but is not money received |
+| `VerifyPaymentReason.amountMismatch` | The amount differs from the expected one |
+| `VerifyPaymentReason.duplicate` | Several incoming transactions share this reference: check manually |
+
+By default, the search covers **the last 30 days** of **the first account**. Use `account`, `from` and `to` to change this.
+
+## Transfers
+
+Every transfer requires an SMS code. `send()` prepares the transfer and sends the SMS, then `confirm()` executes it:
+
+```dart
+final pending = await bm.transfers.send(
+  amount: 1000,
+  sourceId: account.number,             // your account
+  targetId: '00799999000000000000',     // recipient's RIP
+);
+
+// show a screen asking the user for the SMS code, then:
+final receipt = await pending.confirm('123456');
+```
+
+For full control, the same flow is available step by step: `arm()` → `requestOtp(transRef)` → `exec(..., transRef: ..., otp: ...)`.
+
+## Bill payments
+
+```dart
+// 1. Browse what can be paid
+final categories = await bm.payments.categories();
+final providers  = await bm.payments.providers(categories.first.cid);
+
+// 2. Prepare the payment
+final prepared = await bm.payments.check(
+  pid: providers.first.pid,
+  amount: 500,
+  source: const PaymentSource.card('your-card-id'),
+  params: {'phone': '0600000000'},      // fields required by this provider
+);
+
+// 3. Confirm with the SMS code
+await bm.payments.requestOtp(prepared.transRef);
+await bm.payments.exec(
+  pid: providers.first.pid,
+  amount: 500,
+  source: const PaymentSource.card('your-card-id'),
+  params: {'phone': '0600000000'},
+  transRef: prepared.transRef,
+  otp: '123456',
+);
+```
+
+Use `PaymentSource.account(id)` to pay from an account instead of a card. Some services use dynamic forms: explore them with `bm.payments.dynamic.groups()`, `.operation(id)` and `.step(id, params)`.
+
+## Receipts and profile
+
+```dart
+final operations = await bm.receipts.list();                   // recent operations
+final pdf = await bm.receipts.download(operations.first.uid);  // PDF as Uint8List
+await File('receipt.pdf').writeAsBytes(pdf);
+
+final profile = await bm.profile.get();                        // account holder information
+```
+
+## Session storage
+
+The storage keeps the device keys and session cookies between runs.
+
+| Storage | Use case |
+|---------|----------|
+| `FileStorage(path)` | Servers, scripts and desktop apps: saved to a JSON file |
+| `MemoryStorage()` | Tests and short-lived processes: lost when the process stops |
+| Your own | Mobile secure storage, database, secret manager… |
+
+**In a Flutter mobile app, use the platform secure storage.** For example with [`flutter_secure_storage`](https://pub.dev/packages/flutter_secure_storage):
+
+```dart
+import 'dart:convert';
+
+import 'package:baridimob/baridimob.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class SecureSessionStorage implements SessionStorage {
+  static const _storage = FlutterSecureStorage();
+  static const _key = 'baridimob_session';
+
+  @override
+  Future<StoredSession?> load() async {
+    final json = await _storage.read(key: _key);
+    return json == null
+        ? null
+        : StoredSession.fromJson(jsonDecode(json) as Map<String, Object?>);
+  }
+
+  @override
+  Future<void> save(StoredSession session) =>
+      _storage.write(key: _key, value: jsonEncode(session.toJson()));
+
+  @override
+  Future<void> clear() => _storage.delete(key: _key);
+}
+
+final bm = BaridiMob(storage: SecureSessionStorage());
+```
+
+The session JSON is the same as in the TypeScript and Python SDKs. You can also move a session manually with `bm.exportSession()` and `bm.importSession(session)`.
+
+## Configuration
+
+All options are optional:
+
+```dart
+final bm = BaridiMob(
+  storage: FileStorage('session.json'),
+  locale: BaridiMobLocale.fr,              // ar (default), fr or en
+  timeout: const Duration(seconds: 30),    // request timeout
+  retries: 2,                              // retries on network errors
+);
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `storage` | `MemoryStorage()` | Where the session is saved. With memory storage, the device must be confirmed again at every start. |
+| `locale` | `BaridiMobLocale.ar` | Language of server messages and labels |
+| `timeout` | 30 seconds | Request timeout |
+| `retries` | `2` | Number of retries on network errors. Requests that send an OTP or move money are never retried. |
+| `deviceName` | `'BaridiMob SDK'` | Device name shown in BaridiMob |
+| `timeZone` | `'GMT+01:00'` | Time zone sent to the server |
+| `baseUrl` | official server | Server URL (must be HTTPS) |
+| `allowInsecure` | `false` | Allow plain HTTP for non-local URLs (testing only) |
+| `httpClient` | new `http.Client` | Your own [`http.Client`](https://pub.dev/packages/http) (proxy, logging…) |
+
+Call `bm.close()` when you no longer need the client.
+
+## Error handling
+
+All errors extend `BaridiMobError`, so you can catch them precisely:
+
+```dart
+try {
+  await bm.auth.login(login: login, password: password);
+} on InvalidCredentialsError {
+  // wrong login or password
+} on NetworkError {
+  // no connection
+}
+```
+
+| Error | When |
+|-------|------|
+| `InvalidCredentialsError` | Wrong login or password |
+| `InvalidOtpError` / `ExpiredOtpError` | Wrong or expired SMS code |
+| `TooManyAttemptsError` | Too many failed attempts |
+| `AccountLockedError` | The account is locked |
+| `PasswordExpiredError` | The password must be changed in the official app |
+| `DeviceConfirmationRequiredError` | The device is no longer trusted: confirm it again by SMS |
+| `SessionExpiredError` | Session expired and no credentials to log in again |
+| `NetworkError` / `TimeoutError` | Connection problem |
+| `ServerError` | The server returned an error |
+| `ApiResultError` | Any other server error. Inspect `resultCode` and `resultName`. |
+
+## Platform support
+
+| Platform | Supported |
+|----------|-----------|
+| Android, iOS | Yes |
+| macOS, Windows, Linux | Yes |
+| Dart servers and scripts | Yes |
+| Web | No: browsers block direct requests to the BaridiMob server (CORS) |
+
+- **Android:** release builds need the `INTERNET` permission in `AndroidManifest.xml`.
+- **macOS:** enable the `com.apple.security.network.client` entitlement.
+
+## Security
+
+- **The saved session is a live credential.** It contains the session cookies and the device private key. Never commit it or log it. In a mobile app, keep it in the platform secure storage; on a server, encrypt it.
+- **HTTPS is enforced.** Plain HTTP is refused, except for `localhost` / `127.0.0.1` or with `allowInsecure: true`.
+- **Moving money always requires an SMS code** that you pass explicitly. Reading data never does.
+- Add `.baridimob/` (or wherever you store the session file) to your `.gitignore`.
+
+## Disclaimer
+
+This is an independent community project. It is **not affiliated with, endorsed by, or supported by Algérie Poste**. BaridiMob may change its service at any time, which can break this SDK. Use it at your own risk.
+
+## License
+
+MIT

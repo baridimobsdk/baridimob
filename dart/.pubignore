@@ -1,0 +1,5 @@
+# Published package: library, example, README, CHANGELOG, LICENSE only.
+test/
+.dart_tool/
+build/
+pubspec.lock

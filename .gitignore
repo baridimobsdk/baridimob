@@ -46,3 +46,9 @@ docs/
 experiments/
 tools/
 *.local.md
+
+# Dart
+dart/test/
+dart/.dart_tool/
+dart/build/
+dart/pubspec.lock

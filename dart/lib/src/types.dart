@@ -1,0 +1,726 @@
+import 'errors.dart';
+
+/// Language of server messages and labels.
+enum BaridiMobLocale {
+  /// Arabic (default).
+  ar('ar_DZ', 'ar-DZ'),
+
+  /// French.
+  fr('fr_FR', 'fr-FR'),
+
+  /// English.
+  en('en', 'en');
+
+  const BaridiMobLocale(this.tag, this.acceptLanguage);
+
+  /// Locale tag sent at login, for example `ar_DZ`.
+  final String tag;
+
+  /// Value of the `Accept-Language` header.
+  final String acceptLanguage;
+
+  /// Parses `ar`, `fr` or `en`. Unknown values fall back to [ar].
+  static BaridiMobLocale parse(String? value) =>
+      values.firstWhere((locale) => locale.name == value, orElse: () => ar);
+}
+
+/// Everything needed to resume a session: device keys and cookies.
+///
+/// The JSON format is shared with the TypeScript and Python SDKs, so a session
+/// can be moved between them. Treat it as a secret: it is a live credential.
+class StoredSession {
+  /// Creates a session.
+  StoredSession({
+    required this.devid,
+    required this.privateKeyPem,
+    required this.devkey,
+    required this.devkeyAlgorithm,
+    Map<String, String>? cookies,
+    this.locale = BaridiMobLocale.ar,
+    this.account,
+    this.version = 1,
+  }) : cookies = cookies ?? {};
+
+  /// Reads a session saved with [toJson] (or by the TypeScript/Python SDKs).
+  ///
+  /// Throws a [BaridiMobError] when the payload is not a valid session.
+  factory StoredSession.fromJson(Map<String, Object?> json) {
+    final version = json['version'] ?? 1;
+    final devid = json['devid'];
+    final privateKeyPem = json['privateKeyPem'] ?? json['private_key_pem'];
+    final devkey = json['devkey'];
+    final devkeyAlgorithm = json['devkeyAlgorithm'] ?? json['devkey_algorithm'];
+    final cookies = json['cookies'] ?? const <String, Object?>{};
+    final account = json['account'];
+    if (version != 1 ||
+        devid is! String ||
+        privateKeyPem is! String ||
+        devkey is! String ||
+        devkeyAlgorithm is! String ||
+        cookies is! Map ||
+        (account != null && account is! String)) {
+      throw BaridiMobError('Invalid stored session');
+    }
+    return StoredSession(
+      devid: devid,
+      privateKeyPem: privateKeyPem,
+      devkey: devkey,
+      devkeyAlgorithm: devkeyAlgorithm,
+      cookies: {
+        for (final entry in cookies.entries)
+          if (entry.value is String) '${entry.key}': entry.value as String,
+      },
+      locale: BaridiMobLocale.parse(json['locale'] as String?),
+      account: account as String?,
+    );
+  }
+
+  /// Format version, currently `1`.
+  final int version;
+
+  /// Device id.
+  final String devid;
+
+  /// Device private key (PKCS#8 PEM).
+  final String privateKeyPem;
+
+  /// Device public key, as sent to BaridiMob.
+  final String devkey;
+
+  /// Device key algorithm, for example `RSA 2048`.
+  final String devkeyAlgorithm;
+
+  /// Session cookies.
+  Map<String, String> cookies;
+
+  /// Locale used when the device was registered.
+  BaridiMobLocale locale;
+
+  /// Login this session belongs to, once logged in.
+  String? account;
+
+  /// JSON representation, compatible with the TypeScript and Python SDKs.
+  Map<String, Object?> toJson() => {
+        'version': version,
+        'devid': devid,
+        'privateKeyPem': privateKeyPem,
+        'devkey': devkey,
+        'devkeyAlgorithm': devkeyAlgorithm,
+        'cookies': Map<String, String>.of(cookies),
+        'locale': locale.name,
+        if (account != null) 'account': account,
+      };
+
+  /// A deep copy of this session.
+  StoredSession copy() => StoredSession.fromJson(toJson());
+}
+
+/// Where a session is saved between runs.
+///
+/// Implement it to store the session in a database, a secret manager or,
+/// in a Flutter app, the platform secure storage.
+abstract interface class SessionStorage {
+  /// Returns the saved session, or `null` when there is none.
+  Future<StoredSession?> load();
+
+  /// Saves [session], replacing any previous one.
+  Future<void> save(StoredSession session);
+
+  /// Deletes the saved session.
+  Future<void> clear();
+}
+
+/// Outcome of a login attempt.
+enum LoginState {
+  /// Logged in: the API can be used.
+  authenticated,
+
+  /// This device must be confirmed with an SMS code first.
+  otpRequired,
+}
+
+/// Result of `auth.login()` and `auth.confirmDevice()`.
+class LoginResult {
+  const LoginResult._(this.state, this.devid);
+
+  /// The user is logged in.
+  const LoginResult.authenticated() : this._(LoginState.authenticated, null);
+
+  /// The device [devid] must be confirmed with an SMS code.
+  const LoginResult.otpRequired(String devid)
+      : this._(LoginState.otpRequired, devid);
+
+  /// Outcome of the attempt.
+  final LoginState state;
+
+  /// Device to confirm, when [state] is [LoginState.otpRequired].
+  final String? devid;
+
+  /// Whether the user is logged in.
+  bool get isAuthenticated => state == LoginState.authenticated;
+
+  /// Whether the device must be confirmed with an SMS code.
+  bool get isOtpRequired => state == LoginState.otpRequired;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LoginResult && other.state == state && other.devid == devid;
+
+  @override
+  int get hashCode => Object.hash(state, devid);
+
+  @override
+  String toString() => 'LoginResult(${state.name})';
+}
+
+/// A bank account.
+class Account {
+  /// Creates an account.
+  const Account({
+    required this.id,
+    required this.number,
+    required this.balance,
+    required this.currency,
+    this.raw = const {},
+  });
+
+  /// Account id.
+  final String id;
+
+  /// Account number (RIP).
+  final String number;
+
+  /// Current balance.
+  final double balance;
+
+  /// Currency code, usually `DZD`.
+  final String currency;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() => 'Account(number: $number, balance: $balance $currency)';
+}
+
+/// An entry of the transaction history.
+class Transaction {
+  /// Creates a transaction.
+  const Transaction({
+    required this.amount,
+    required this.currency,
+    required this.description,
+    required this.type,
+    required this.tid,
+    required this.timestamp,
+    this.date,
+    this.fee,
+    this.refNum,
+    this.raw = const {},
+  });
+
+  /// Amount: positive for money received, negative for money sent.
+  final double amount;
+
+  /// Currency code, usually `DZD`.
+  final String currency;
+
+  /// Description, in the client locale.
+  final String description;
+
+  /// Operation type.
+  final String type;
+
+  /// Transaction id.
+  final String tid;
+
+  /// Server timestamp, `yyyyMMddHHmmss` in Algeria time.
+  final String timestamp;
+
+  /// [timestamp] as a UTC [DateTime], or `null` when it cannot be parsed.
+  final DateTime? date;
+
+  /// Fee charged, if any.
+  final double? fee;
+
+  /// Reference number of the operation.
+  final String? refNum;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() =>
+      'Transaction(refNum: $refNum, amount: $amount $currency, date: $date)';
+}
+
+/// A page of the transaction history.
+class HistoryPage {
+  /// Creates a page.
+  const HistoryPage({required this.page, required this.transactions});
+
+  /// Page number, starting at 1.
+  final int page;
+
+  /// Transactions of this page. Empty after the last page.
+  final List<Transaction> transactions;
+}
+
+/// Why [VerifyPaymentResult.verified] is true or false.
+enum VerifyPaymentReason {
+  /// Payment found, incoming, and the amount matches.
+  ok('ok'),
+
+  /// No transaction with this reference number.
+  notFound('not_found'),
+
+  /// The amount differs from the expected one.
+  amountMismatch('amount_mismatch'),
+
+  /// The transaction exists but is not money received.
+  notIncoming('not_incoming'),
+
+  /// Several incoming transactions share this reference: check manually.
+  duplicate('duplicate');
+
+  const VerifyPaymentReason(this.code);
+
+  /// Same value as in the TypeScript and Python SDKs, for example `not_found`.
+  final String code;
+}
+
+/// Result of `payments.verifyPayment()`.
+class VerifyPaymentResult {
+  /// Creates a result.
+  const VerifyPaymentResult({
+    required this.verified,
+    required this.reason,
+    required this.transaction,
+    required this.matches,
+  });
+
+  /// Whether the payment was received with the expected amount.
+  final bool verified;
+
+  /// Why the payment is (or is not) verified.
+  final VerifyPaymentReason reason;
+
+  /// The matching incoming transaction, if any.
+  final Transaction? transaction;
+
+  /// Every transaction with this reference number in the searched period.
+  final List<Transaction> matches;
+}
+
+/// Holder information.
+class Profile {
+  /// Creates a profile.
+  const Profile({
+    required this.actorId,
+    this.clientName,
+    this.lastLogin,
+    this.financialOperationsDisabled = false,
+    this.raw = const {},
+  });
+
+  /// Client id.
+  final String actorId;
+
+  /// Client name.
+  final String? clientName;
+
+  /// Last login, as sent by the server.
+  final String? lastLogin;
+
+  /// Whether payments and transfers are disabled on this account.
+  final bool financialOperationsDisabled;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A recent operation, with the [uid] needed to download its receipt.
+class RecentOperation {
+  /// Creates an operation.
+  const RecentOperation({
+    required this.uid,
+    required this.type,
+    required this.pid,
+    required this.amount,
+    required this.currency,
+    required this.timestamp,
+    this.date,
+    this.providerName,
+    this.sourceType,
+    this.sourceId,
+    this.status,
+    this.raw = const {},
+  });
+
+  /// Operation id, used by `receipts.download()`.
+  final String uid;
+
+  /// Operation type.
+  final String type;
+
+  /// Provider id.
+  final String pid;
+
+  /// Amount.
+  final double amount;
+
+  /// Currency code.
+  final String currency;
+
+  /// Server timestamp, `yyyyMMddHHmmss` in Algeria time.
+  final String timestamp;
+
+  /// [timestamp] as a UTC [DateTime].
+  final DateTime? date;
+
+  /// Provider name, for example `Mobilis`.
+  final String? providerName;
+
+  /// `1` for a card, `2` for an account.
+  final int? sourceType;
+
+  /// Card or account used.
+  final String? sourceId;
+
+  /// Operation status.
+  final int? status;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A payment category, for example mobile networks.
+class PaymentCategory {
+  /// Creates a category.
+  const PaymentCategory(
+      {required this.cid, required this.name, this.image, this.raw = const {}});
+
+  /// Category id.
+  final String cid;
+
+  /// Category name.
+  final String name;
+
+  /// Image id.
+  final String? image;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A field a provider needs, for example the phone number to top up.
+class ProviderParam {
+  /// Creates a field.
+  const ProviderParam({
+    required this.id,
+    required this.name,
+    required this.type,
+    this.pattern,
+    this.min,
+    this.max,
+    this.value,
+    this.description,
+    this.hasExternalHandler = false,
+  });
+
+  /// Field id, used as the key in `params`.
+  final String id;
+
+  /// Field name.
+  final String name;
+
+  /// Field type, for example `PHONE`.
+  final String type;
+
+  /// Input pattern.
+  final String? pattern;
+
+  /// Minimum length or value.
+  final num? min;
+
+  /// Maximum length or value.
+  final num? max;
+
+  /// Default value.
+  final String? value;
+
+  /// Field description.
+  final String? description;
+
+  /// Whether the value comes from an external handler.
+  final bool hasExternalHandler;
+}
+
+/// A biller, for example Mobilis.
+class PaymentProvider {
+  /// Creates a provider.
+  const PaymentProvider({
+    required this.pid,
+    required this.name,
+    this.mappedId,
+    this.cid,
+    this.scenario,
+    this.categoryName,
+    this.params = const [],
+    this.raw = const {},
+  });
+
+  /// Provider id, used by `payments.check()` and `payments.exec()`.
+  final String pid;
+
+  /// Provider name.
+  final String name;
+
+  /// Stable code, for example `MOBILIS`.
+  final String? mappedId;
+
+  /// Category id.
+  final String? cid;
+
+  /// Payment scenario.
+  final String? scenario;
+
+  /// Category name.
+  final String? categoryName;
+
+  /// Fields to send in `params`.
+  final List<ProviderParam> params;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// Kind of payment source.
+enum PaymentSourceType {
+  /// A card (`sourceType=1`).
+  card,
+
+  /// An account (`sourceType=2`).
+  account,
+}
+
+/// The card or account a payment is taken from.
+class PaymentSource {
+  /// Pays with the card [id].
+  const PaymentSource.card(this.id) : type = PaymentSourceType.card;
+
+  /// Pays from the account [id].
+  const PaymentSource.account(this.id) : type = PaymentSourceType.account;
+
+  /// Card or account.
+  final PaymentSourceType type;
+
+  /// Card or account id.
+  final String id;
+}
+
+/// A payment prepared by `payments.check()`, waiting for its SMS code.
+class PaymentCheckResult {
+  /// Creates a result.
+  const PaymentCheckResult(
+      {required this.transRef, this.confirmationType, this.raw = const {}});
+
+  /// Reference to pass to `requestOtp()` and `exec()`.
+  final String transRef;
+
+  /// Confirmation method, usually `otp`.
+  final String? confirmationType;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// Result of an executed payment.
+class PaymentExecResult {
+  /// Creates a result.
+  const PaymentExecResult({this.raw = const {}});
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// Reference to a dynamic operation or step.
+class DynamicOperationRef {
+  /// Creates a reference.
+  const DynamicOperationRef({required this.id, required this.label});
+
+  /// Id.
+  final String id;
+
+  /// Label.
+  final String label;
+}
+
+/// A group of dynamic operations.
+class DynamicGroup {
+  /// Creates a group.
+  const DynamicGroup({
+    required this.id,
+    required this.label,
+    this.type,
+    this.image,
+    this.operations = const [],
+    this.raw = const {},
+  });
+
+  /// Group id.
+  final String id;
+
+  /// Group label.
+  final String label;
+
+  /// Group type.
+  final String? type;
+
+  /// Image id.
+  final String? image;
+
+  /// Operations of this group.
+  final List<DynamicOperationRef> operations;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// Metadata of a dynamic operation.
+class DynamicOperationInfo {
+  /// Creates the metadata.
+  const DynamicOperationInfo({
+    required this.id,
+    required this.label,
+    this.firstStep,
+    this.saveTemplateEnabled = false,
+    this.raw = const {},
+  });
+
+  /// Operation id.
+  final String id;
+
+  /// Operation label.
+  final String label;
+
+  /// First step of the form.
+  final DynamicOperationRef? firstStep;
+
+  /// Whether the operation can be saved as a template.
+  final bool saveTemplateEnabled;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A field of a dynamic form step.
+class DynamicStepInput {
+  /// Creates a field.
+  const DynamicStepInput({
+    required this.id,
+    required this.label,
+    required this.type,
+    this.required = false,
+    this.settings,
+    this.raw = const {},
+  });
+
+  /// Field id.
+  final String id;
+
+  /// Field label.
+  final String label;
+
+  /// Field type.
+  final String type;
+
+  /// Whether the field must be filled.
+  final bool required;
+
+  /// Field settings, as sent by the server.
+  final Object? settings;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A step of a dynamic form.
+class DynamicStep {
+  /// Creates a step.
+  const DynamicStep(
+      {required this.id,
+      required this.label,
+      this.inputs = const [],
+      this.raw = const {}});
+
+  /// Step id.
+  final String id;
+
+  /// Step label.
+  final String label;
+
+  /// Fields of this step.
+  final List<DynamicStepInput> inputs;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A transfer prepared by `transfers.arm()`, waiting for its SMS code.
+class TransferArmResult {
+  /// Creates a result.
+  const TransferArmResult(
+      {required this.transRef, this.confirmationType, this.raw = const {}});
+
+  /// Reference to pass to `requestOtp()` and `exec()`.
+  final String transRef;
+
+  /// Confirmation method, usually `otp`.
+  final String? confirmationType;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// Result of an executed transfer.
+class TransferExecResult {
+  /// Creates a result.
+  const TransferExecResult({this.raw = const {}});
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A transfer whose SMS code has been sent. Call [confirm] with the code.
+class TransferPending {
+  /// Creates a pending transfer.
+  TransferPending({
+    required this.transRef,
+    required this.amount,
+    required this.sourceId,
+    required this.targetId,
+    required this.confirmationType,
+    required Future<TransferExecResult> Function(String otp) confirm,
+  }) : _confirm = confirm;
+
+  /// Transfer reference.
+  final String transRef;
+
+  /// Amount to send.
+  final num amount;
+
+  /// Your account.
+  final String sourceId;
+
+  /// Recipient account (RIP).
+  final String targetId;
+
+  /// Confirmation method, usually `otp`.
+  final String? confirmationType;
+
+  final Future<TransferExecResult> Function(String otp) _confirm;
+
+  /// Executes the transfer with the SMS [otp].
+  Future<TransferExecResult> confirm(String otp) => _confirm(otp);
+}
