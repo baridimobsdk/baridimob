@@ -209,6 +209,7 @@ RecentOperation _parseRecentOperation(Object? item) {
     sourceType: asNumber(raw['sourceType'])?.toInt(),
     sourceId: asString(raw['sourceId']),
     status: asNumber(raw['status'])?.toInt(),
+    operationId: _detailValue(raw['details'], 'operationId'),
     raw: raw,
   );
 }

@@ -821,6 +821,27 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
         binary: true,
       });
     },
+    async find(transaction: Transaction) {
+      const operations = await receipts.list();
+      const byReference =
+        transaction.refNum === null
+          ? undefined
+          : operations.find((operation) => operation.operationId === transaction.refNum);
+      return (
+        byReference ??
+        operations.find(
+          (operation) =>
+            operation.timestamp !== '' &&
+            operation.timestamp === transaction.timestamp &&
+            Math.abs(Math.abs(operation.amount) - Math.abs(transaction.amount)) < 0.01,
+        ) ??
+        null
+      );
+    },
+    async downloadFor(transaction: Transaction) {
+      const operation = await receipts.find(transaction);
+      return operation && operation.uid !== '' ? receipts.download(operation.uid) : null;
+    },
   };
 
   const profile: ProfileModule = {

@@ -965,6 +965,27 @@ class _Receipts:
             )
         )
 
+    def find(self, transaction: Transaction) -> RecentOperation | None:
+        operations = self.list()
+        if transaction.ref_num is not None:
+            for operation in operations:
+                if operation.operation_id == transaction.ref_num:
+                    return operation
+        for operation in operations:
+            if (
+                operation.timestamp
+                and operation.timestamp == transaction.timestamp
+                and abs(abs(operation.amount) - abs(transaction.amount)) < 0.01
+            ):
+                return operation
+        return None
+
+    def download_for(self, transaction: Transaction) -> bytes | None:
+        operation = self.find(transaction)
+        if operation is None or not operation.uid:
+            return None
+        return self.download(operation.uid)
+
 
 class _Profile:
     def __init__(self, client: BaridiMob):

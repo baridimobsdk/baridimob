@@ -277,6 +277,7 @@ class RecentOperation:
     source_type: int | None
     source_id: str | None
     status: int | None
+    operation_id: str | None = None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
 

@@ -220,12 +220,15 @@ export interface RecentOperation {
   sourceType: number | null;
   sourceId: string | null;
   status: number | null;
+  operationId: string | null;
   raw: Record<string, unknown>;
 }
 
 export interface ReceiptsModule {
   list(): Promise<RecentOperation[]>;
   download(uid: string): Promise<Uint8Array>;
+  find(transaction: Transaction): Promise<RecentOperation | null>;
+  downloadFor(transaction: Transaction): Promise<Uint8Array | null>;
 }
 
 export interface ProviderParam {

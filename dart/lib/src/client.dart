@@ -1054,6 +1054,37 @@ class ReceiptsModule {
         _RequestSpec('GET', 'download/receipt',
             params: {'uid': uid}, binary: true),
       );
+
+  /// The recent operation behind [transaction], from the account history.
+  ///
+  /// Matched by reference number, or by time and amount when the movement
+  /// has none. `null` when BaridiMob no longer keeps the operation: receipts
+  /// exist only for the last few operations.
+  Future<RecentOperation?> find(Transaction transaction) async {
+    final operations = await list();
+    final reference = transaction.refNum;
+    if (reference != null) {
+      for (final operation in operations) {
+        if (operation.operationId == reference) return operation;
+      }
+    }
+    for (final operation in operations) {
+      if (operation.timestamp.isNotEmpty &&
+          operation.timestamp == transaction.timestamp &&
+          (operation.amount.abs() - transaction.amount.abs()).abs() < 0.01) {
+        return operation;
+      }
+    }
+    return null;
+  }
+
+  /// The PDF receipt of [transaction], or `null` when BaridiMob no longer
+  /// keeps it (see [find]).
+  Future<Uint8List?> downloadFor(Transaction transaction) async {
+    final operation = await find(transaction);
+    if (operation == null || operation.uid.isEmpty) return null;
+    return download(operation.uid);
+  }
 }
 
 /// Holder information.

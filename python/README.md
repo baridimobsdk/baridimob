@@ -256,8 +256,19 @@ operations = bm.receipts.list()                       # recent operations
 pdf = bm.receipts.download(operations[0].uid)         # PDF as bytes
 Path("receipt.pdf").write_bytes(pdf)
 
+# The receipt of a movement from the history, or None
+movement = bm.accounts.transactions(account).transactions[0]
+receipt = bm.receipts.download_for(movement)
+if receipt:
+    Path("movement.pdf").write_bytes(receipt)
+
 profile = bm.profile.get()                            # account holder information
 ```
+
+`receipts.find(transaction)` returns the recent operation behind a history
+movement, matched by its reference number (or by time and amount).
+BaridiMob keeps receipts only for the last few operations, so `find()` and
+`download_for()` return `None` for older ones.
 
 ## Session storage
 

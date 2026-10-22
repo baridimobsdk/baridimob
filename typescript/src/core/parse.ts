@@ -208,6 +208,7 @@ export function parseRecentOperations(body: Record<string, unknown>): RecentOper
       sourceType: asNumber(raw['sourceType']),
       sourceId: asString(raw['sourceId']),
       status: asNumber(raw['status']),
+      operationId: detailValue(raw['details'], 'operationId'),
       raw,
     };
   });

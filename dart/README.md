@@ -285,8 +285,18 @@ final operations = await bm.receipts.list();                   // recent operati
 final pdf = await bm.receipts.download(operations.first.uid);  // PDF as Uint8List
 await File('receipt.pdf').writeAsBytes(pdf);
 
+// The receipt of a movement from the history, or null
+final page = await bm.accounts.transactions(account: account);
+final receipt = await bm.receipts.downloadFor(page.transactions.first);
+if (receipt != null) await File('movement.pdf').writeAsBytes(receipt);
+
 final profile = await bm.profile.get();                        // account holder information
 ```
+
+`receipts.find(transaction)` returns the recent operation behind a history
+movement, matched by its reference number (or by time and amount).
+BaridiMob keeps receipts only for the last few operations, so `find()` and
+`downloadFor()` return `null` for older ones.
 
 ## Session storage
 

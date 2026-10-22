@@ -257,6 +257,7 @@ def parse_recent_operations(body: dict[str, Any]) -> list[RecentOperation]:
                     if as_number(raw.get("status")) is None
                     else int(as_number(raw.get("status")) or 0)
                 ),
+                operation_id=detail_value(raw.get("details"), "operationId"),
                 raw=raw,
             )
         )

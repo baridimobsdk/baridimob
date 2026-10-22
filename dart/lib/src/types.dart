@@ -520,6 +520,7 @@ class RecentOperation {
     this.sourceType,
     this.sourceId,
     this.status,
+    this.operationId,
     this.raw = const {},
   });
 
@@ -555,6 +556,10 @@ class RecentOperation {
 
   /// Operation status.
   final int? status;
+
+  /// The operation's reference: the same value as [Transaction.refNum] in
+  /// the account history.
+  final String? operationId;
 
   /// Raw server data.
   final Map<String, Object?> raw;

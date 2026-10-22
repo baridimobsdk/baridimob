@@ -1,3 +1,12 @@
+## 0.3.0
+
+- Receipts of history movements: `receipts.find(transaction)` returns the
+  recent operation behind a movement (matched by reference number, or by
+  time and amount), and `receipts.downloadFor(transaction)` its PDF, or
+  `null` when BaridiMob no longer keeps it.
+- `RecentOperation.operationId`, the reference shared with
+  `Transaction.refNum`.
+
 ## 0.2.0
 
 - Cards: list regular and virtual cards, read a card and its limits, and
