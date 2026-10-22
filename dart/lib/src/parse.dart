@@ -77,6 +77,75 @@ List<Transaction> parseHistory(Map<String, Object?> body) => [
         parseTransaction(asRecord(item))
     ];
 
+/// A server flag, sent as `0`/`1`, `true`/`false` or a numeric string.
+bool _flag(Object? value, {bool fallback = false}) {
+  if (value is bool) return value;
+  final number = asNumber(value);
+  return number == null ? fallback : number != 0;
+}
+
+/// Parses one card.
+BaridiMobCard parseCard(Map<String, Object?> raw) {
+  final linked = <String>[];
+  for (final item in asArray(raw['linkedAccounts'])) {
+    final value = asString(item);
+    if (value != null) linked.add(value);
+  }
+  return BaridiMobCard(
+    id: asString(raw['id']) ?? '',
+    number: asString(raw['number']) ?? '',
+    name: asString(raw['name']) ?? '',
+    brand: asString(raw['brand']) ?? '',
+    status: asNumber(raw['status'])?.toInt() ?? -1,
+    expDate: asString(raw['expDate']) ?? '',
+    type: asNumber(raw['type'])?.toInt() ?? 0,
+    category: asString(raw['category']),
+    balance: asNumber(raw['balance'])?.toDouble(),
+    currency: asString(raw['currency']),
+    embossedName: asString(raw['embossedName']),
+    active: _flag(raw['active'], fallback: true),
+    pinNotSet: _flag(raw['pinNotSet']),
+    linkedAccounts: linked,
+    isDebitAllowed: _flag(raw['isDebitAllowed'], fallback: true),
+    raw: raw,
+  );
+}
+
+/// Parses the `cards` response.
+List<BaridiMobCard> parseCards(Map<String, Object?> body) =>
+    [for (final item in asArray(body['cards'])) parseCard(asRecord(item))];
+
+/// Parses the `card` response, which may or may not wrap the card.
+BaridiMobCard parseCardResponse(Map<String, Object?> body) {
+  final direct = asRecord(body['card']);
+  return parseCard(direct.isNotEmpty ? direct : body);
+}
+
+/// Parses one card limit.
+CardLimit _parseCardLimit(Map<String, Object?> raw) => CardLimit(
+      uid: asString(raw['uid']) ?? '',
+      name: asString(raw['name']) ?? '',
+      description: asString(raw['description']),
+      type: asNumber(raw['type'])?.toInt() ?? 0,
+      amount: asNumber(raw['amount'])?.toDouble(),
+      usedAmount: asNumber(raw['usedAmount'])?.toDouble(),
+      opCount: asNumber(raw['opCount'])?.toInt(),
+      usedOpCount: asNumber(raw['usedOpCount'])?.toInt(),
+      currency: asString(raw['currency']),
+      active: _flag(raw['active'], fallback: true),
+      changeable: _flag(raw['changeable']),
+      permanent: _flag(raw['permanent']),
+      perTransaction: _flag(raw['perTransaction']),
+      endTime: asString(raw['endTime']),
+      raw: raw,
+    );
+
+/// Parses the `cardLimits` response.
+List<CardLimit> parseCardLimits(Map<String, Object?> body) => [
+      for (final item in asArray(body['limits']))
+        _parseCardLimit(asRecord(item))
+    ];
+
 /// Formats [value] as the `yyyyMMdd` date expected by the server.
 ///
 /// A UTC [DateTime] is converted to Algeria time first; a local one is used
@@ -242,6 +311,11 @@ DynamicOperationInfo parseDynamicOperation(Map<String, Object?> body) {
 DynamicStepInput _parseStepInput(Object? value) {
   final raw = asRecord(value);
   final settings = asRecord(raw['settings']);
+  final accessAttributes = <String>[];
+  for (final item in asArray(raw['accessAttributes'])) {
+    final text = asString(item);
+    if (text != null) accessAttributes.add(text);
+  }
   return DynamicStepInput(
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
@@ -250,6 +324,14 @@ DynamicStepInput _parseStepInput(Object? value) {
         settings['required'] == true ||
         settings['required'] == 'true',
     settings: raw['settings'],
+    choices: [
+      for (final item in asArray(raw['selectionList']))
+        DynamicChoice(
+          value: asString(asRecord(item)['value']) ?? '',
+          label: asString(asRecord(item)['label']) ?? '',
+        )
+    ],
+    accessAttributes: accessAttributes,
     raw: raw,
   );
 }
@@ -266,3 +348,34 @@ DynamicStep parseDynamicStep(Map<String, Object?> body) {
     raw: raw,
   );
 }
+
+/// Parses the `dynamic/operation/check` response.
+DynamicCheckResult parseDynamicCheck(Map<String, Object?> body) =>
+    DynamicCheckResult(
+      transRef: asString(body['transRef']) ?? '',
+      confirmationType: asString(asRecord(body['confirmReq'])['type']),
+      fee: asNumber(body['fee'])?.toDouble(),
+      currency: asString(body['currency']),
+      planDate: asString(body['planDate']),
+      raw: body,
+    );
+
+/// Parses the `dynamic/operation/execute` response.
+DynamicExecResult parseDynamicExec(Map<String, Object?> body) =>
+    DynamicExecResult(
+      transRef: asString(body['transRef']),
+      recentOpId: asString(body['recentOpId']),
+      recentOpType: asString(body['recentOpType']),
+      authid: asString(body['authid']),
+      confirmationType: asString(asRecord(body['confirmReq'])['type']),
+      raw: body,
+    );
+
+/// Parses the `dynamic/operation/complete` response.
+DynamicCompleteResult parseDynamicComplete(Map<String, Object?> body) =>
+    DynamicCompleteResult(
+      recentOpId: asString(body['recentOpId']),
+      recentOpType: asString(body['recentOpType']),
+      authid: asString(body['authid']),
+      raw: body,
+    );

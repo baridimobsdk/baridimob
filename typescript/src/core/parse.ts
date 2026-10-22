@@ -1,5 +1,11 @@
 import type {
   Account,
+  Card,
+  CardLimit,
+  DynamicCheckResult,
+  DynamicChoice,
+  DynamicCompleteResult,
+  DynamicExecResult,
   DynamicGroup,
   DynamicOperationInfo,
   DynamicOperationRef,
@@ -70,6 +76,68 @@ export function parseTransaction(raw: Record<string, unknown>): Transaction {
 
 export function parseHistory(body: Record<string, unknown>): Transaction[] {
   return asArray(body['history']).map((item) => parseTransaction(asRecord(item)));
+}
+
+function flag(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value;
+  const number = asNumber(value);
+  return number === null ? fallback : number !== 0;
+}
+
+export function parseCard(raw: Record<string, unknown>): Card {
+  return {
+    id: asString(raw['id']) ?? '',
+    number: asString(raw['number']) ?? '',
+    name: asString(raw['name']) ?? '',
+    brand: asString(raw['brand']) ?? '',
+    status: asNumber(raw['status']) ?? -1,
+    expDate: asString(raw['expDate']) ?? '',
+    type: asNumber(raw['type']) ?? 0,
+    category: asString(raw['category']),
+    balance: asNumber(raw['balance']),
+    currency: asString(raw['currency']),
+    embossedName: asString(raw['embossedName']),
+    active: flag(raw['active'], true),
+    pinNotSet: flag(raw['pinNotSet']),
+    linkedAccounts: asArray(raw['linkedAccounts'])
+      .map((item) => asString(item))
+      .filter((value): value is string => value !== null),
+    isDebitAllowed: flag(raw['isDebitAllowed'], true),
+    raw,
+  };
+}
+
+export function parseCards(body: Record<string, unknown>): Card[] {
+  return asArray(body['cards']).map((item) => parseCard(asRecord(item)));
+}
+
+export function parseCardResponse(body: Record<string, unknown>): Card {
+  const direct = asRecord(body['card']);
+  return parseCard(Object.keys(direct).length > 0 ? direct : body);
+}
+
+export function parseCardLimit(raw: Record<string, unknown>): CardLimit {
+  return {
+    uid: asString(raw['uid']) ?? '',
+    name: asString(raw['name']) ?? '',
+    description: asString(raw['description']),
+    type: asNumber(raw['type']) ?? 0,
+    amount: asNumber(raw['amount']),
+    usedAmount: asNumber(raw['usedAmount']),
+    opCount: asNumber(raw['opCount']),
+    usedOpCount: asNumber(raw['usedOpCount']),
+    currency: asString(raw['currency']),
+    active: flag(raw['active'], true),
+    changeable: flag(raw['changeable']),
+    permanent: flag(raw['permanent']),
+    perTransaction: flag(raw['perTransaction']),
+    endTime: asString(raw['endTime']),
+    raw,
+  };
+}
+
+export function parseCardLimits(body: Record<string, unknown>): CardLimit[] {
+  return asArray(body['limits']).map((item) => parseCardLimit(asRecord(item)));
 }
 
 export function toDateParam(value: Date | string): string {
@@ -223,12 +291,23 @@ function parseStepInput(value: unknown): DynamicStepInput {
   const settings = asRecord(raw['settings']);
   const required =
     raw['required'] === true || settings['required'] === true || settings['required'] === 'true';
+  const choices: DynamicChoice[] = asArray(raw['selectionList']).map((item) => {
+    const choice = asRecord(item);
+    return {
+      value: asString(choice['value']) ?? '',
+      label: asString(choice['label']) ?? '',
+    };
+  });
   return {
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
     type: asString(raw['type']) ?? '',
     required,
     settings: raw['settings'] ?? null,
+    choices,
+    accessAttributes: asArray(raw['accessAttributes'])
+      .map((item) => asString(item))
+      .filter((item): item is string => item !== null),
     raw,
   };
 }
@@ -240,5 +319,36 @@ export function parseDynamicStep(body: Record<string, unknown>): DynamicStep {
     label: asString(raw['label']) ?? '',
     inputs: asArray(raw['inputs']).map(parseStepInput),
     raw,
+  };
+}
+
+export function parseDynamicCheck(body: Record<string, unknown>): DynamicCheckResult {
+  return {
+    transRef: asString(body['transRef']) ?? '',
+    confirmationType: asString(asRecord(body['confirmReq'])['type']),
+    fee: asNumber(body['fee']),
+    currency: asString(body['currency']),
+    planDate: asString(body['planDate']),
+    raw: body,
+  };
+}
+
+export function parseDynamicExec(body: Record<string, unknown>): DynamicExecResult {
+  return {
+    transRef: asString(body['transRef']),
+    recentOpId: asString(body['recentOpId']),
+    recentOpType: asString(body['recentOpType']),
+    authid: asString(body['authid']),
+    confirmationType: asString(asRecord(body['confirmReq'])['type']),
+    raw: body,
+  };
+}
+
+export function parseDynamicComplete(body: Record<string, unknown>): DynamicCompleteResult {
+  return {
+    recentOpId: asString(body['recentOpId']),
+    recentOpType: asString(body['recentOpType']),
+    authid: asString(body['authid']),
+    raw: body,
   };
 }

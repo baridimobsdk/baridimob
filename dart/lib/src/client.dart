@@ -99,6 +99,9 @@ class BaridiMob {
   /// Accounts, balance and transaction history.
   late final AccountsModule accounts = AccountsModule._(this);
 
+  /// Cards, their history and limits.
+  late final CardsModule cards = CardsModule._(this);
+
   /// Payment verification and bill payments.
   late final PaymentsModule payments = PaymentsModule._(this);
 
@@ -345,6 +348,36 @@ class BaridiMob {
       yield* Stream.fromIterable(items);
     }
   }
+
+  Future<List<Transaction>> _cardHistoryPage(
+    String card,
+    DateTime? from,
+    DateTime? to,
+    int page,
+    String? state,
+  ) async {
+    final params = {
+      'card': card,
+      'page': '$page',
+      if (from != null) 'startDate': toDateParam(from),
+      if (to != null) 'endDate': toDateParam(to),
+      if (state != null) 'transactionState': state,
+    };
+    return parseHistory(await _get('cardHistory', params));
+  }
+
+  Stream<Transaction> _cardTransactions(
+    String card,
+    DateTime? from,
+    DateTime? to,
+    String? state,
+  ) async* {
+    for (var page = 1; page <= _maxHistoryPages; page++) {
+      final items = await _cardHistoryPage(card, from, to, page, state);
+      if (items.isEmpty) return;
+      yield* Stream.fromIterable(items);
+    }
+  }
 }
 
 class _RequestSpec {
@@ -552,6 +585,67 @@ class AccountsModule {
   }
 }
 
+/// Cards, their history and limits.
+class CardsModule {
+  CardsModule._(this._client);
+
+  final BaridiMob _client;
+
+  /// All the cards of the client, regular and virtual.
+  ///
+  /// BaridiMob ignores the `category` filter, so one request returns every
+  /// card; read [BaridiMobCard.category] to tell them apart.
+  Future<List<BaridiMobCard>> list() async =>
+      parseCards(await _client._get('cards', {'category': 'REGULAR'}));
+
+  /// One card by [id], with its dynamic details.
+  Future<BaridiMobCard> get(String id) async =>
+      parseCardResponse(await _client._get('card', {'id': id}));
+
+  /// The limits of the card [id].
+  Future<List<CardLimit>> limits(String id) async => parseCardLimits(
+        await _client._get('cardLimits', {
+          'card': id,
+          'language': _client.locale.name,
+          'locale': _client.locale.tag,
+        }),
+      );
+
+  /// One page of the movements of [card], between [from] and [to].
+  ///
+  /// [state] is `all`, `hold` or `processed`; `null` leaves it to the server.
+  Future<HistoryPage> history({
+    required String card,
+    DateTime? from,
+    DateTime? to,
+    int page = 1,
+    String? state,
+  }) async =>
+      HistoryPage(
+        page: page,
+        transactions:
+            await _client._cardHistoryPage(card, from, to, page, state),
+      );
+
+  /// The whole history of [card] between [from] and [to].
+  Future<List<Transaction>> allHistory({
+    required String card,
+    DateTime? from,
+    DateTime? to,
+    String? state,
+  }) =>
+      _client._cardTransactions(card, from, to, state).toList();
+
+  /// The history of [card], fetched page by page as you read it.
+  Stream<Transaction> iterHistory({
+    required String card,
+    DateTime? from,
+    DateTime? to,
+    String? state,
+  }) =>
+      _client._cardTransactions(card, from, to, state);
+}
+
 /// Payment verification and bill payments.
 class PaymentsModule {
   PaymentsModule._(this._client);
@@ -726,13 +820,87 @@ class DynamicPaymentsModule {
       parseDynamicOperation(
           await _client._get('dynamic/operation', {'operationId': id}));
 
-  /// Submits [params] to the operation [operationId] and returns the next step.
-  Future<DynamicStep> step(String operationId,
-          [Map<String, Object?> params = const {}]) async =>
+  /// Submits [params] to the operation [operationId] and returns the next
+  /// step.
+  ///
+  /// [currentStepKey] is the `id` of the step being filled; omit it for the
+  /// first call with a fresh operation.
+  Future<DynamicStep> step(
+    String operationId, [
+    Map<String, Object?> params = const {},
+    String? currentStepKey,
+  ]) async =>
       parseDynamicStep(await _client._request(_RequestSpec(
         'POST',
         'dynamic/operation/step',
-        json: {'operationId': operationId, 'parameters': params},
+        json: {
+          'operationId': operationId,
+          if (currentStepKey != null) 'currentStepKey': currentStepKey,
+          'parameters': params,
+        },
+      )));
+
+  /// Validates the operation [operationId] with the filled [params] and
+  /// returns the reference needed by [exec].
+  Future<DynamicCheckResult> check(
+    String operationId, [
+    Map<String, String> params = const {},
+  ]) async =>
+      parseDynamicCheck(await _client._request(_RequestSpec(
+        'POST',
+        'dynamic/operation/check',
+        params: {
+          'operationId': operationId,
+          for (final entry in params.entries) 'param.${entry.key}': entry.value,
+        },
+      )));
+
+  /// Sends the SMS code of the checked operation [transRef].
+  Future<void> requestOtp(String transRef) async {
+    await _client._request(_RequestSpec(
+      'GET',
+      'getOTPbySMS',
+      params: {'transRef': transRef},
+      safe: false,
+    ));
+  }
+
+  /// Executes the operation prepared by [check] with the SMS [otp].
+  /// Never retried automatically.
+  Future<DynamicExecResult> exec({
+    required String operationId,
+    required String transRef,
+    required String otp,
+    Map<String, String> params = const {},
+  }) async =>
+      parseDynamicExec(await _client._request(_RequestSpec(
+        'POST',
+        'dynamic/operation/execute',
+        safe: false,
+        params: {
+          'operationId': operationId,
+          'transRef': transRef,
+          'confirmVal': otp,
+          for (final entry in params.entries) 'param.${entry.key}': entry.value,
+        },
+      )));
+
+  /// Completes an operation when the server asks for an extra confirmation
+  /// step (such as 3D Secure) after [exec].
+  Future<DynamicCompleteResult> complete({
+    required String operationId,
+    required String transRef,
+    required String confirmVal,
+  }) async =>
+      parseDynamicComplete(await _client._request(_RequestSpec(
+        'POST',
+        'dynamic/operation/complete',
+        safe: false,
+        params: {
+          'operationId': operationId,
+          'transRef': transRef,
+          'confirmVal': confirmVal,
+        },
       )));
 }
 

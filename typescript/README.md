@@ -23,6 +23,7 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 - [Quick start](#quick-start)
 - [How login works](#how-login-works)
 - [Accounts and history](#accounts-and-history)
+- [Cards](#cards)
 - [Verify an incoming payment](#verify-an-incoming-payment)
 - [Transfers](#transfers)
 - [Bill payments](#bill-payments)
@@ -111,6 +112,39 @@ const tx = await bm.accounts.findTransaction({ account: account.number, refNum: 
 
 Each `Transaction` contains `amount` (positive = incoming, negative = outgoing), `currency`, `description`, `date`, `fee`, `refNum`, and the original server data in `raw`.
 
+## Cards
+
+```ts
+const cards = await bm.cards.list();          // regular and virtual
+const card = await bm.cards.get(cards[0]!.id);
+const limits = await bm.cards.limits(card.id);
+
+const page = await bm.cards.history({ card: card.id, from: new Date(2026, 0, 1) });
+const movements = await bm.cards.allHistory({ card: card.id });
+
+for await (const movement of bm.cards.iterHistory({ card: card.id })) {
+  console.log(movement.date, movement.amount);
+}
+```
+
+`Card` carries `number`, `name`, `brand`, `status`, `expDate` (`yyyyMM`),
+`type`, `balance`, `currency`, `embossedName`, `linkedAccounts` and the raw
+payload. `status` is `0` valid, `20` temporary block, `21` permanent block,
+`99` expired, `12` not activated, `1` invalid PIN limit, `10` fraud block.
+
+`number` is the full card number, exactly as BaridiMob sends it. Keep it out of
+logs and error reports.
+
+`CardLimit` carries `type` (`0` amount, `1` number of operations), `amount` and
+`usedAmount` or `opCount` and `usedOpCount`, `active`, `changeable`,
+`permanent`, `perTransaction` and `endTime`.
+
+`history` accepts `state: 'all' | 'hold' | 'processed'`.
+
+BaridiMob ignores the `category` filter of `/cards` (verified live), so `list()`
+makes a single request that returns every card. Use `card.category` (`regular`
+or `virtual`) to tell them apart.
+
 ## Verify an incoming payment
 
 Useful for shops and services that accept payment by BaridiMob transfer. The customer gives you the transfer's reference number, and you check that the money has really arrived.
@@ -182,7 +216,46 @@ await bm.payments.exec({
 });
 ```
 
-Some services use dynamic forms. Explore them with `bm.payments.dynamic.groups()`, `.operation(id)` and `.step(id, params)`.
+An account can be named as the source in the API, but BaridiMob refuses it for
+`paymentCheck` (verified live); use a card.
+
+**Bills through the dynamic engine.** Some services (Algérie Télécom, ADE,
+SEAL, Sonelgaz, AADL…) return the form themselves:
+
+```ts
+const groups = await bm.payments.dynamic.groups();
+const operation = groups[0]!.operations[0]!;
+
+const form = await bm.payments.dynamic.step(operation.id); // first form
+const values = {
+  phone: '0600000000',
+  sourceId: 'card-scid',
+  sourceType: '1',
+  amount: '500',
+  currency: 'DZD',
+};
+
+// for a later step, send the current step id and every value so far
+// const next = await bm.payments.dynamic.step(operation.id, values, form.id);
+
+const checked = await bm.payments.dynamic.check(operation.id, values);
+await bm.payments.dynamic.requestOtp(checked.transRef);
+const result = await bm.payments.dynamic.exec({
+  operationId: operation.id,
+  transRef: checked.transRef,
+  otp: '123456',
+  params: values,
+});
+console.log(result.recentOpId, result.recentOpType);
+```
+
+`check()` returns `DynamicCheckResult`; `exec()` returns `DynamicExecResult`.
+`complete()` is for an extra confirmation step (such as 3D Secure) when the
+server asks for one. Values are sent as `param.<id>`.
+
+> **Not yet verified live:** `check()`, `exec()` and `complete()` use the
+> endpoints of the official app, but their requests have not been tested against
+> the real server yet. `groups()`, `operation()` and `step()` are verified.
 
 ## Receipts and profile
 

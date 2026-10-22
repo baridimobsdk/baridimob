@@ -80,6 +80,62 @@ export interface HistoryPage {
   transactions: Transaction[];
 }
 
+export interface Card {
+  id: string;
+  number: string;
+  name: string;
+  brand: string;
+  status: number;
+  expDate: string;
+  type: number;
+  category: string | null;
+  balance: number | null;
+  currency: string | null;
+  embossedName: string | null;
+  active: boolean;
+  pinNotSet: boolean;
+  linkedAccounts: string[];
+  isDebitAllowed: boolean;
+  raw: Record<string, unknown>;
+}
+
+export interface CardLimit {
+  uid: string;
+  name: string;
+  description: string | null;
+  type: number;
+  amount: number | null;
+  usedAmount: number | null;
+  opCount: number | null;
+  usedOpCount: number | null;
+  currency: string | null;
+  active: boolean;
+  changeable: boolean;
+  permanent: boolean;
+  perTransaction: boolean;
+  endTime: string | null;
+  raw: Record<string, unknown>;
+}
+
+export type CardTransactionState = 'all' | 'hold' | 'processed';
+
+export interface CardHistoryQuery {
+  card: string;
+  from?: Date | string;
+  to?: Date | string;
+  page?: number;
+  state?: CardTransactionState;
+}
+
+export interface CardsModule {
+  list(): Promise<Card[]>;
+  get(id: string): Promise<Card>;
+  limits(cardId: string): Promise<CardLimit[]>;
+  history(query: CardHistoryQuery): Promise<HistoryPage>;
+  allHistory(query: Omit<CardHistoryQuery, 'page'>): Promise<Transaction[]>;
+  iterHistory(query: Omit<CardHistoryQuery, 'page'>): AsyncGenerator<Transaction, void, void>;
+}
+
 export interface TransactionQuery {
   account: string;
   from?: Date | string;
@@ -252,12 +308,19 @@ export interface DynamicOperationInfo {
   raw: Record<string, unknown>;
 }
 
+export interface DynamicChoice {
+  value: string;
+  label: string;
+}
+
 export interface DynamicStepInput {
   id: string;
   label: string;
   type: string;
   required: boolean;
   settings: unknown;
+  choices: DynamicChoice[];
+  accessAttributes: string[];
   raw: Record<string, unknown>;
 }
 
@@ -268,10 +331,59 @@ export interface DynamicStep {
   raw: Record<string, unknown>;
 }
 
+export interface DynamicCheckResult {
+  transRef: string;
+  confirmationType: string | null;
+  fee: number | null;
+  currency: string | null;
+  planDate: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface DynamicExecResult {
+  transRef: string | null;
+  recentOpId: string | null;
+  recentOpType: string | null;
+  authid: string | null;
+  confirmationType: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface DynamicCompleteResult {
+  recentOpId: string | null;
+  recentOpType: string | null;
+  authid: string | null;
+  raw: Record<string, unknown>;
+}
+
 export interface DynamicPaymentsModule {
   groups(): Promise<DynamicGroup[]>;
   operation(id: string | number): Promise<DynamicOperationInfo>;
-  step(operationId: string | number, params?: Record<string, unknown>): Promise<DynamicStep>;
+  step(
+    operationId: string | number,
+    params?: Record<string, unknown>,
+    currentStepKey?: string,
+  ): Promise<DynamicStep>;
+  check(
+    operationId: string | number,
+    params?: Record<string, string>,
+  ): Promise<DynamicCheckResult>;
+  requestOtp(transRef: string): Promise<void>;
+  exec(params: DynamicExecParams): Promise<DynamicExecResult>;
+  complete(params: DynamicCompleteParams): Promise<DynamicCompleteResult>;
+}
+
+export interface DynamicExecParams {
+  operationId: string | number;
+  transRef: string;
+  otp: string;
+  params?: Record<string, string>;
+}
+
+export interface DynamicCompleteParams {
+  operationId: string | number;
+  transRef: string;
+  confirmVal: string;
 }
 
 export interface TransferStrategiesParams {
@@ -334,6 +446,7 @@ export interface TransfersModule {
 export interface BaridiMobClient {
   auth: AuthModule;
   accounts: AccountsModule;
+  cards: CardsModule;
   payments: PaymentsModule;
   transfers: TransfersModule;
   receipts: ReceiptsModule;

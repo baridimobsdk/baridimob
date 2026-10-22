@@ -31,6 +31,12 @@ from .parse import (
     is_within_bounds,
     parse_account_response,
     parse_accounts,
+    parse_card_limits,
+    parse_card_response,
+    parse_cards,
+    parse_dynamic_check,
+    parse_dynamic_complete,
+    parse_dynamic_exec,
     parse_dynamic_groups,
     parse_dynamic_operation,
     parse_dynamic_step,
@@ -46,6 +52,11 @@ from .sign import sign_json_body, sign_params
 from .storage import MemoryStorage
 from .types import (
     Account,
+    Card,
+    CardLimit,
+    DynamicCheckResult,
+    DynamicCompleteResult,
+    DynamicExecResult,
     DynamicGroup,
     DynamicOperationInfo,
     DynamicStep,
@@ -134,6 +145,7 @@ class BaridiMob:
         self._relogin_lock = threading.Lock()
         self.auth = _Auth(self)
         self.accounts = _Accounts(self)
+        self.cards = _Cards(self)
         self.payments = _Payments(self)
         self.transfers = _Transfers(self)
         self.receipts = _Receipts(self)
@@ -314,6 +326,38 @@ class BaridiMob:
     ) -> Iterator[Transaction]:
         for page in range(1, MAX_HISTORY_PAGES + 1):
             items = self._fetch_history_page(account, from_value, to_value, page)
+            if not items:
+                return
+            yield from items
+
+    def _fetch_card_history_page(
+        self,
+        card: str,
+        from_value: date | datetime | str | None,
+        to_value: date | datetime | str | None,
+        page: int,
+        state: str | None,
+    ) -> list[Transaction]:
+        params = {"card": card, "page": str(page)}
+        if from_value is not None:
+            params["startDate"] = to_date_param(from_value)
+        if to_value is not None:
+            params["endDate"] = to_date_param(to_value)
+        if state is not None:
+            params["transactionState"] = state
+        return parse_history(self._get("cardHistory", params))
+
+    def _iterate_card_transactions(
+        self,
+        card: str,
+        from_value: date | datetime | str | None,
+        to_value: date | datetime | str | None,
+        state: str | None,
+    ) -> Iterator[Transaction]:
+        for page in range(1, MAX_HISTORY_PAGES + 1):
+            items = self._fetch_card_history_page(
+                card, from_value, to_value, page, state
+            )
             if not items:
                 return
             yield from items
@@ -500,6 +544,69 @@ class _Accounts:
         return None
 
 
+class _Cards:
+    def __init__(self, client: BaridiMob):
+        self._client = client
+
+    def list(self) -> list[Card]:
+        return parse_cards(self._client._get("cards", {"category": "REGULAR"}))
+
+    def get(self, card_id: str) -> Card:
+        return parse_card_response(self._client._get("card", {"id": card_id}))
+
+    def limits(self, card_id: str) -> list[CardLimit]:
+        locale = self._client.config.locale
+        return parse_card_limits(
+            self._client._get(
+                "cardLimits",
+                {
+                    "card": card_id,
+                    "language": locale,
+                    "locale": LOCALE_TAG.get(locale, "ar_DZ"),
+                },
+            )
+        )
+
+    def history(
+        self,
+        card: str,
+        from_value: date | datetime | str | None = None,
+        to_value: date | datetime | str | None = None,
+        page: int = 1,
+        state: str | None = None,
+    ) -> HistoryPage:
+        return HistoryPage(
+            page=page,
+            transactions=self._client._fetch_card_history_page(
+                card, from_value, to_value, page, state
+            ),
+        )
+
+    def all_history(
+        self,
+        card: str,
+        from_value: date | datetime | str | None = None,
+        to_value: date | datetime | str | None = None,
+        state: str | None = None,
+    ) -> list[Transaction]:
+        return list(
+            self._client._iterate_card_transactions(
+                card, from_value, to_value, state
+            )
+        )
+
+    def iter_history(
+        self,
+        card: str,
+        from_value: date | datetime | str | None = None,
+        to_value: date | datetime | str | None = None,
+        state: str | None = None,
+    ) -> Iterator[Transaction]:
+        return self._client._iterate_card_transactions(
+            card, from_value, to_value, state
+        )
+
+
 class _Dynamic:
     def __init__(self, client: BaridiMob):
         self._client = client
@@ -515,7 +622,10 @@ class _Dynamic:
         )
 
     def step(
-        self, operation_id: str | int, params: dict[str, Any] | None = None
+        self,
+        operation_id: str | int,
+        params: dict[str, Any] | None = None,
+        current_step_key: str | None = None,
     ) -> DynamicStep:
         return parse_dynamic_step(
             self._client._request(
@@ -524,8 +634,84 @@ class _Dynamic:
                     endpoint="dynamic/operation/step",
                     json_body={
                         "operationId": str(operation_id),
+                        **(
+                            {"currentStepKey": current_step_key}
+                            if current_step_key is not None
+                            else {}
+                        ),
                         "parameters": params or {},
                     },
+                )
+            )
+        )
+
+    def check(
+        self,
+        operation_id: str | int,
+        params: dict[str, str] | None = None,
+    ) -> DynamicCheckResult:
+        form = {"operationId": str(operation_id)}
+        for key, value in (params or {}).items():
+            form[f"param.{key}"] = value
+        return parse_dynamic_check(
+            self._client._request(
+                _RequestSpec(
+                    method="POST",
+                    endpoint="dynamic/operation/check",
+                    params=form,
+                )
+            )
+        )
+
+    def request_otp(self, trans_ref: str) -> None:
+        self._client._request(
+            _RequestSpec(
+                method="GET",
+                endpoint="getOTPbySMS",
+                params={"transRef": trans_ref},
+                safe=False,
+            )
+        )
+
+    def exec(
+        self,
+        operation_id: str | int,
+        trans_ref: str,
+        otp: str,
+        params: dict[str, str] | None = None,
+    ) -> DynamicExecResult:
+        form = {
+            "operationId": str(operation_id),
+            "transRef": trans_ref,
+            "confirmVal": otp,
+        }
+        for key, value in (params or {}).items():
+            form[f"param.{key}"] = value
+        return parse_dynamic_exec(
+            self._client._request(
+                _RequestSpec(
+                    method="POST",
+                    endpoint="dynamic/operation/execute",
+                    params=form,
+                    safe=False,
+                )
+            )
+        )
+
+    def complete(
+        self, operation_id: str | int, trans_ref: str, confirm_val: str
+    ) -> DynamicCompleteResult:
+        return parse_dynamic_complete(
+            self._client._request(
+                _RequestSpec(
+                    method="POST",
+                    endpoint="dynamic/operation/complete",
+                    params={
+                        "operationId": str(operation_id),
+                        "transRef": trans_ref,
+                        "confirmVal": confirm_val,
+                    },
+                    safe=False,
                 )
             )
         )

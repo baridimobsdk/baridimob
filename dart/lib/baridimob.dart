@@ -16,6 +16,7 @@ export 'src/client.dart'
         AccountsModule,
         AuthModule,
         BaridiMob,
+        CardsModule,
         DynamicPaymentsModule,
         PasswordHasher,
         PaymentsModule,
@@ -32,7 +33,7 @@ export 'src/keys.dart'
         devkeyAlgorithmHash,
         generateDeviceKeys,
         sha256Hex;
-export 'src/parse.dart' hide parseAccountResponse;
+export 'src/parse.dart' hide parseAccountResponse, parseCardResponse;
 export 'src/result.dart' show resultNameFor;
 export 'src/sign.dart' show initialStamp, signJsonBody, signParams;
 export 'src/storage.dart';

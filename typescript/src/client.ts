@@ -21,6 +21,12 @@ import {
   isWithinBounds,
   parseAccountResponse,
   parseAccounts,
+  parseCardLimits,
+  parseCardResponse,
+  parseCards,
+  parseDynamicCheck,
+  parseDynamicComplete,
+  parseDynamicExec,
   parseDynamicGroups,
   parseDynamicOperation,
   parseDynamicStep,
@@ -40,7 +46,13 @@ import type {
   AuthModule,
   BaridiMobClient,
   BaridiMobConfig,
+  Card,
+  CardHistoryQuery,
+  CardLimit,
+  CardsModule,
   Credentials,
+  DynamicCompleteParams,
+  DynamicExecParams,
   FindTransactionParams,
   HistoryQuery,
   Locale,
@@ -407,6 +419,36 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
     }
   }
 
+  async function fetchCardHistoryPage(
+    card: string,
+    from: Date | string | undefined,
+    to: Date | string | undefined,
+    page: number,
+    state: string | undefined,
+  ): Promise<Transaction[]> {
+    const params: Record<string, string> = { card, page: String(page) };
+    if (from !== undefined) params['startDate'] = toDateParam(from);
+    if (to !== undefined) params['endDate'] = toDateParam(to);
+    if (state !== undefined) params['transactionState'] = state;
+    return parseHistory(await call('cardHistory', params));
+  }
+
+  async function* iterateCardTransactions(
+    query: Omit<CardHistoryQuery, 'page'>,
+  ): AsyncGenerator<Transaction, void, void> {
+    for (let page = 1; page <= MAX_HISTORY_PAGES; page += 1) {
+      const items = await fetchCardHistoryPage(
+        query.card,
+        query.from,
+        query.to,
+        page,
+        query.state,
+      );
+      if (items.length === 0) return;
+      for (const item of items) yield item;
+    }
+  }
+
   async function collectMatches(
     query: TransactionQuery,
     refNum: string,
@@ -461,6 +503,48 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
       }
       return null;
     },
+  };
+
+  const cards: CardsModule = {
+    async list(): Promise<Card[]> {
+      return parseCards(await call('cards', { category: 'REGULAR' }));
+    },
+
+    async get(id: string): Promise<Card> {
+      return parseCardResponse(await call('card', { id }));
+    },
+
+    async limits(cardId: string): Promise<CardLimit[]> {
+      return parseCardLimits(
+        await call('cardLimits', {
+          card: cardId,
+          language: locale,
+          locale: LOCALE_TAG[locale],
+        }),
+      );
+    },
+
+    async history(query: CardHistoryQuery) {
+      const page = query.page ?? 1;
+      return {
+        page,
+        transactions: await fetchCardHistoryPage(
+          query.card,
+          query.from,
+          query.to,
+          page,
+          query.state,
+        ),
+      };
+    },
+
+    async allHistory(query: Omit<CardHistoryQuery, 'page'>): Promise<Transaction[]> {
+      const collected: Transaction[] = [];
+      for await (const transaction of iterateCardTransactions(query)) collected.push(transaction);
+      return collected;
+    },
+
+    iterHistory: iterateCardTransactions,
   };
 
   const payments: PaymentsModule = {
@@ -566,12 +650,75 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
           }),
         );
       },
-      async step(operationId: string | number, params: Record<string, unknown> = {}) {
+      async step(
+        operationId: string | number,
+        params: Record<string, unknown> = {},
+        currentStepKey?: string,
+      ) {
         return parseDynamicStep(
           await request({
             method: 'POST',
             endpoint: 'dynamic/operation/step',
-            json: { operationId: String(operationId), parameters: params },
+            json: {
+              operationId: String(operationId),
+              ...(currentStepKey === undefined ? {} : { currentStepKey }),
+              parameters: params,
+            },
+          }),
+        );
+      },
+
+      async check(operationId: string | number, params: Record<string, string> = {}) {
+        const form: Record<string, string> = { operationId: String(operationId) };
+        for (const [key, value] of Object.entries(params)) form[`param.${key}`] = value;
+        return parseDynamicCheck(
+          await request({
+            method: 'POST',
+            endpoint: 'dynamic/operation/check',
+            params: form,
+          }),
+        );
+      },
+
+      async requestOtp(transRef: string) {
+        await request({
+          method: 'GET',
+          endpoint: 'getOTPbySMS',
+          params: { transRef },
+          safe: false,
+        });
+      },
+
+      async exec(params: DynamicExecParams) {
+        const form: Record<string, string> = {
+          operationId: String(params.operationId),
+          transRef: params.transRef,
+          confirmVal: params.otp,
+        };
+        for (const [key, value] of Object.entries(params.params ?? {})) {
+          form[`param.${key}`] = value;
+        }
+        return parseDynamicExec(
+          await request({
+            method: 'POST',
+            endpoint: 'dynamic/operation/execute',
+            params: form,
+            safe: false,
+          }),
+        );
+      },
+
+      async complete(params: DynamicCompleteParams) {
+        return parseDynamicComplete(
+          await request({
+            method: 'POST',
+            endpoint: 'dynamic/operation/complete',
+            params: {
+              operationId: String(params.operationId),
+              transRef: params.transRef,
+              confirmVal: params.confirmVal,
+            },
+            safe: false,
           }),
         );
       },
@@ -715,6 +862,7 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
   return {
     auth,
     accounts,
+    cards,
     payments,
     transfers,
     receipts,

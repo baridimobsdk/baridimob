@@ -22,6 +22,7 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 - [Quick start](#quick-start)
 - [How login works](#how-login-works)
 - [Accounts and history](#accounts-and-history)
+- [Cards](#cards)
 - [Verify an incoming payment](#verify-an-incoming-payment)
 - [Transfers](#transfers)
 - [Bill payments](#bill-payments)
@@ -103,6 +104,38 @@ tx = bm.accounts.find_transaction(account.number, "012345678901")
 
 Each `Transaction` contains `amount` (positive = incoming, negative = outgoing), `currency`, `description`, `date`, `fee`, `ref_num`, and the original server data in `raw`.
 
+## Cards
+
+```python
+cards = bm.cards.list()                 # regular and virtual
+card = bm.cards.get(cards[0].id)
+limits = bm.cards.limits(card.id)
+
+page = bm.cards.history(card.id, from_value=date(2026, 1, 1))
+movements = bm.cards.all_history(card.id)
+
+for movement in bm.cards.iter_history(card.id):
+    print(movement.date, movement.amount)
+```
+
+`Card` carries `number`, `name`, `brand`, `status`, `exp_date` (`yyyyMM`),
+`type`, `balance`, `currency`, `embossed_name`, `linked_accounts` and the raw
+payload. `status` is `0` valid, `20` temporary block, `21` permanent block,
+`99` expired, `12` not activated, `1` invalid PIN limit, `10` fraud block.
+
+`number` is the full card number, exactly as BaridiMob sends it. Keep it out of
+logs and error reports; `repr()` leaves it out.
+
+`CardLimit` carries `type` (`0` amount, `1` number of operations), `amount` and
+`used_amount` or `op_count` and `used_op_count`, `active`, `changeable`,
+`permanent`, `per_transaction` and `end_time`.
+
+`history` accepts `state="all"`, `"hold"` or `"processed"`.
+
+BaridiMob ignores the `category` filter of `/cards` (verified live), so `list()`
+makes a single request that returns every card. Use `card.category` (`regular`
+or `virtual`) to tell them apart.
+
 ## Verify an incoming payment
 
 Useful for shops and services that accept payment by BaridiMob transfer. The customer gives you the transfer's reference number, and you check that the money has really arrived.
@@ -175,7 +208,44 @@ bm.payments.exec(
 )
 ```
 
-Some services use dynamic forms. Explore them with `bm.payments.dynamic.groups()`, `.operation(id)` and `.step(id, params)`.
+`source_type="account"` is part of the API, but BaridiMob refuses an account as
+the payment source for `paymentCheck` (verified live); use a card.
+
+**Bills through the dynamic engine.** Some services (Algérie Télécom, ADE,
+SEAL, Sonelgaz, AADL…) return the form themselves:
+
+```python
+groups = bm.payments.dynamic.groups()
+operation = groups[0].operations[0]
+
+form = bm.payments.dynamic.step(operation.id)   # the first form
+values = {
+    "phone": "0600000000",
+    "sourceId": "card-scid",
+    "sourceType": "1",
+    "amount": "500",
+    "currency": "DZD",
+}
+
+# for a later step, send the current step id and everything filled so far
+# next_form = bm.payments.dynamic.step(operation.id, values, form.id)
+
+checked = bm.payments.dynamic.check(operation.id, values)
+bm.payments.dynamic.request_otp(checked.trans_ref)
+result = bm.payments.dynamic.exec(
+    operation.id, checked.trans_ref, "123456", values
+)
+print(result.recent_op_id, result.recent_op_type)
+```
+
+`check()` returns `DynamicCheckResult` (`trans_ref`, `confirmation_type`, `fee`,
+`plan_date`); `exec()` returns `DynamicExecResult`. `complete()` is for an
+extra confirmation step (such as 3D Secure) when the server asks for one.
+Values are sent as `param.<id>`.
+
+> **Not yet verified live:** `check()`, `exec()` and `complete()` use the
+> endpoints of the official app, but their requests have not been tested against
+> the real server yet. `groups()`, `operation()` and `step()` are verified.
 
 ## Receipts and profile
 

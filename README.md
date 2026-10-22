@@ -7,7 +7,7 @@
 
 <br>
 
-Read your BaridiMob accounts, verify incoming payments, send transfers and pay bills from your own code.
+Read your BaridiMob accounts and cards, verify incoming payments, send transfers and pay bills from your own code.
 
 [![npm](https://img.shields.io/npm/v/baridimob?label=npm)](https://www.npmjs.com/package/baridimob)
 [![PyPI](https://img.shields.io/pypi/v/baridimob?label=PyPI)](https://pypi.org/project/baridimob/)
@@ -34,9 +34,10 @@ The SDK is available for three languages. All of them expose the same features w
 |---------|-------------|
 | **Login** | Sign in with your BaridiMob credentials. The device is confirmed once by SMS, then reused. |
 | **Accounts** | List accounts, read the balance, browse the full transaction history. |
+| **Cards** | List regular and virtual cards, read a card and its limits, and browse its movements. |
 | **Payment verification** | Confirm that a customer's transfer has really arrived, by reference number and amount. |
 | **Transfers** | Send money to another account (always confirmed by SMS code). |
-| **Bill payments** | Mobile top-up (Mobilis, Djezzy, Ooredoo), Algérie Télécom and other billers. |
+| **Bill payments** | Mobile top-up (Mobilis, Djezzy, Ooredoo) through the static payment flow, and Algérie Télécom, Sonelgaz, ADE, SEAL and other bills through the dynamic FPE form engine. |
 | **Receipts** | List recent operations and download their PDF receipts. |
 
 ## Quick look

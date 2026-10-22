@@ -1,3 +1,15 @@
+## 0.2.0
+
+- Cards: list regular and virtual cards, read a card and its limits, and
+  browse its movements (`cards.list`, `cards.get`, `cards.limits`,
+  `cards.history`, `cards.allHistory`, `cards.iterHistory`). A card is a
+  `BaridiMobCard`, so it does not clash with Flutter's `Card` widget.
+- Dynamic payments: validate, confirm and execute bill operations
+  (`dynamic.check`, `dynamic.requestOtp`, `dynamic.exec`,
+  `dynamic.complete`), with the current step key on `dynamic.step` and the
+  choices/access attributes of each form field. `check`, `exec` and
+  `complete` are not yet verified against the live server.
+
 ## 0.1.0
 
 - Initial release.

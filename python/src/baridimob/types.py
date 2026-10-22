@@ -54,6 +54,65 @@ class HistoryPage:
 
 
 @dataclass
+class Card:
+    id: str
+    number: str = field(repr=False)
+    name: str
+    brand: str
+    status: int
+    exp_date: str
+    type: int = 0
+    category: str | None = None
+    balance: float | None = None
+    currency: str | None = None
+    embossed_name: str | None = None
+    active: bool = True
+    pin_not_set: bool = False
+    linked_accounts: list[str] = field(default_factory=list)
+    is_debit_allowed: bool = True
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+    @property
+    def is_valid(self) -> bool:
+        return self.status == 0
+
+    @property
+    def is_temporarily_blocked(self) -> bool:
+        return self.status == 20
+
+    @property
+    def is_permanently_blocked(self) -> bool:
+        return self.status == 21
+
+    @property
+    def is_expired(self) -> bool:
+        return self.status == 99
+
+
+@dataclass
+class CardLimit:
+    uid: str
+    name: str
+    description: str | None = None
+    type: int = 0
+    amount: float | None = None
+    used_amount: float | None = None
+    op_count: int | None = None
+    used_op_count: int | None = None
+    currency: str | None = None
+    active: bool = True
+    changeable: bool = False
+    permanent: bool = False
+    per_transaction: bool = False
+    end_time: str | None = None
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+    @property
+    def is_count(self) -> bool:
+        return self.type == 1
+
+
+@dataclass
 class LoginResult:
     state: str
     devid: str | None = None
@@ -130,12 +189,20 @@ class DynamicOperationInfo:
 
 
 @dataclass
+class DynamicChoice:
+    value: str
+    label: str
+
+
+@dataclass
 class DynamicStepInput:
     id: str
     label: str
     type: str
     required: bool
     settings: Any
+    choices: list[DynamicChoice] = field(default_factory=list)
+    access_attributes: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
 
@@ -144,6 +211,34 @@ class DynamicStep:
     id: str
     label: str
     inputs: list[DynamicStepInput]
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+
+@dataclass
+class DynamicCheckResult:
+    trans_ref: str
+    confirmation_type: str | None
+    fee: float | None
+    currency: str | None
+    plan_date: str | None
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+
+@dataclass
+class DynamicExecResult:
+    trans_ref: str | None
+    recent_op_id: str | None
+    recent_op_type: str | None
+    authid: str | None
+    confirmation_type: str | None
+    raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+
+@dataclass
+class DynamicCompleteResult:
+    recent_op_id: str | None
+    recent_op_type: str | None
+    authid: str | None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
 
 

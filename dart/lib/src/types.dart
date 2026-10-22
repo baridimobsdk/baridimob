@@ -266,6 +266,172 @@ class HistoryPage {
   final List<Transaction> transactions;
 }
 
+/// A payment card.
+///
+/// Called `Card` in the TypeScript and Python SDKs; the prefix avoids a clash
+/// with Flutter's `Card` widget.
+class BaridiMobCard {
+  /// Creates a card.
+  const BaridiMobCard({
+    required this.id,
+    required this.number,
+    required this.name,
+    required this.brand,
+    required this.status,
+    required this.expDate,
+    this.type = 0,
+    this.category,
+    this.balance,
+    this.currency,
+    this.embossedName,
+    this.active = true,
+    this.pinNotSet = false,
+    this.linkedAccounts = const [],
+    this.isDebitAllowed = true,
+    this.raw = const {},
+  });
+
+  /// Card id, used by the other card calls.
+  final String id;
+
+  /// Full card number, exactly as the server sends it. Keep it out of logs;
+  /// [toString] leaves it out.
+  final String number;
+
+  /// Card name, when the holder gave it one.
+  final String name;
+
+  /// Brand, for example `VISA_CLASSIC`.
+  final String brand;
+
+  /// Card status: `0` valid, `1` invalid PIN limit, `10` fraud block,
+  /// `12` not activated, `20` temporary block, `21` permanent block,
+  /// `99` expired.
+  final int status;
+
+  /// Expiry, `yyyyMM`.
+  final String expDate;
+
+  /// `1` debit, `2` credit.
+  final int type;
+
+  /// `regular`, `virtual` or `external`.
+  final String? category;
+
+  /// Card balance.
+  final double? balance;
+
+  /// Balance currency, usually `DZD`.
+  final String? currency;
+
+  /// Name embossed on the card.
+  final String? embossedName;
+
+  /// Whether the card is active.
+  final bool active;
+
+  /// Whether the PIN was never set.
+  final bool pinNotSet;
+
+  /// Accounts linked to the card.
+  final List<String> linkedAccounts;
+
+  /// Whether debit operations are allowed.
+  final bool isDebitAllowed;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  /// Whether the card is in the valid state.
+  bool get isValid => status == 0;
+
+  /// Whether the card is temporarily blocked.
+  bool get isTemporarilyBlocked => status == 20;
+
+  /// Whether the card is permanently blocked.
+  bool get isPermanentlyBlocked => status == 21;
+
+  /// Whether the card has expired.
+  bool get isExpired => status == 99;
+
+  @override
+  String toString() =>
+      'BaridiMobCard(id: $id, brand: $brand, status: $status, expDate: $expDate)';
+}
+
+/// One spending or operation limit on a card.
+class CardLimit {
+  /// Creates a limit.
+  const CardLimit({
+    required this.uid,
+    required this.name,
+    this.description,
+    this.type = 0,
+    this.amount,
+    this.usedAmount,
+    this.opCount,
+    this.usedOpCount,
+    this.currency,
+    this.active = true,
+    this.changeable = false,
+    this.permanent = false,
+    this.perTransaction = false,
+    this.endTime,
+    this.raw = const {},
+  });
+
+  /// Limit id.
+  final String uid;
+
+  /// Limit name, in the client locale.
+  final String name;
+
+  /// Limit description, in the client locale.
+  final String? description;
+
+  /// `0` for an amount, `1` for a number of operations.
+  final int type;
+
+  /// Maximum amount, when [type] is `0`.
+  final double? amount;
+
+  /// Amount used.
+  final double? usedAmount;
+
+  /// Maximum number of operations, when [type] is `1`.
+  final int? opCount;
+
+  /// Operations used.
+  final int? usedOpCount;
+
+  /// Amount currency.
+  final String? currency;
+
+  /// Whether the limit is active.
+  final bool active;
+
+  /// Whether the limit can be changed.
+  final bool changeable;
+
+  /// Whether the limit is permanent.
+  final bool permanent;
+
+  /// Whether the limit applies to one operation.
+  final bool perTransaction;
+
+  /// End of a temporary limit, `yyyyMMddHHmmss`.
+  final String? endTime;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  /// Whether this is a count limit rather than an amount limit.
+  bool get isCount => type == 1;
+
+  @override
+  String toString() => 'CardLimit(uid: $uid, name: $name, active: $active)';
+}
+
 /// Why [VerifyPaymentResult.verified] is true or false.
 enum VerifyPaymentReason {
   /// Payment found, incoming, and the amount matches.
@@ -623,6 +789,8 @@ class DynamicStepInput {
     required this.type,
     this.required = false,
     this.settings,
+    this.choices = const [],
+    this.accessAttributes = const [],
     this.raw = const {},
   });
 
@@ -632,7 +800,7 @@ class DynamicStepInput {
   /// Field label.
   final String label;
 
-  /// Field type.
+  /// Field type, for example `phone`, `source_storage`, `select`, `money`.
   final String type;
 
   /// Whether the field must be filled.
@@ -641,8 +809,26 @@ class DynamicStepInput {
   /// Field settings, as sent by the server.
   final Object? settings;
 
+  /// Choices of a `select` field.
+  final List<DynamicChoice> choices;
+
+  /// Access attributes, for example `payment_source`.
+  final List<String> accessAttributes;
+
   /// Raw server data.
   final Map<String, Object?> raw;
+}
+
+/// One choice of a dynamic select field.
+class DynamicChoice {
+  /// Creates a choice.
+  const DynamicChoice({required this.value, required this.label});
+
+  /// Value sent to the server.
+  final String value;
+
+  /// Label shown to the user.
+  final String label;
 }
 
 /// A step of a dynamic form.
@@ -662,6 +848,92 @@ class DynamicStep {
 
   /// Fields of this step.
   final List<DynamicStepInput> inputs;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// The result of `dynamic.check()`: a prepared operation waiting for its
+/// confirmation code.
+class DynamicCheckResult {
+  /// Creates a result.
+  const DynamicCheckResult({
+    required this.transRef,
+    this.confirmationType,
+    this.fee,
+    this.currency,
+    this.planDate,
+    this.raw = const {},
+  });
+
+  /// Reference to pass to `exec()`.
+  final String transRef;
+
+  /// Confirmation method, usually `otp`.
+  final String? confirmationType;
+
+  /// Fee charged, if any.
+  final double? fee;
+
+  /// Fee currency.
+  final String? currency;
+
+  /// Planned execution date, when the server gives one.
+  final String? planDate;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// The result of `dynamic.exec()`.
+class DynamicExecResult {
+  /// Creates a result.
+  const DynamicExecResult({
+    this.transRef,
+    this.recentOpId,
+    this.recentOpType,
+    this.authid,
+    this.confirmationType,
+    this.raw = const {},
+  });
+
+  /// Operation reference.
+  final String? transRef;
+
+  /// Id of the recent operation created by the server.
+  final String? recentOpId;
+
+  /// Type of the recent operation.
+  final String? recentOpType;
+
+  /// Authentication id, when the server asks for an extra confirmation step.
+  final String? authid;
+
+  /// Further confirmation method, if the server asks for one.
+  final String? confirmationType;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// The result of `dynamic.complete()`.
+class DynamicCompleteResult {
+  /// Creates a result.
+  const DynamicCompleteResult({
+    this.recentOpId,
+    this.recentOpType,
+    this.authid,
+    this.raw = const {},
+  });
+
+  /// Id of the recent operation created by the server.
+  final String? recentOpId;
+
+  /// Type of the recent operation.
+  final String? recentOpType;
+
+  /// Authentication id, when present.
+  final String? authid;
 
   /// Raw server data.
   final Map<String, Object?> raw;
