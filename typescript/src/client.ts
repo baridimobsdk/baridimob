@@ -17,12 +17,17 @@ import {
 import type { SendResult } from './core/http.js';
 import { algorithmHash, generateDeviceKeys, sha256Hex } from './core/keys.js';
 import {
+  DEFAULT_CARDLESS_DATE_PATTERN,
   dayBounds,
+  formatDatePattern,
   isWithinBounds,
   parseAccountResponse,
   parseAccounts,
   parseCardLimits,
   parseCardResponse,
+  parseCardlessCode,
+  parseCardlessCodes,
+  parseCardlessForm,
   parseCards,
   parseDynamicCheck,
   parseDynamicComplete,
@@ -49,6 +54,9 @@ import type {
   Card,
   CardHistoryQuery,
   CardLimit,
+  CardlessCreateParams,
+  CardlessInput,
+  CardlessModule,
   CardsModule,
   Credentials,
   DynamicCompleteParams,
@@ -844,6 +852,98 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
     },
   };
 
+  // A hidden value is sent back as BaridiMob wrote it; a blank one with a
+  // device stereotype takes this device's data, as in the official app.
+  function hiddenValue(input: CardlessInput, current: StoredSession | null): string {
+    const value = input.value ?? '';
+    if (value.trim() !== '' || !current) return value;
+    switch (input.stereotype) {
+      case 'deviceId':
+        return current.devid;
+      case 'devicePublicKey':
+        return current.devkey;
+      case 'devicePublicKeyAlgorithm':
+        return current.devkeyAlgorithm;
+      default:
+        return value;
+    }
+  }
+
+  function cardlessValue(
+    input: CardlessInput,
+    params: CardlessCreateParams,
+    current: StoredSession | null,
+  ): string | null {
+    switch (input.type) {
+      case 'hidden':
+        return hiddenValue(input, current);
+      case 'select':
+        if (
+          params.type !== undefined &&
+          input.choices.some((choice) => choice.value === params.type)
+        ) {
+          return params.type;
+        }
+        return input.value ?? input.choices[0]?.value ?? null;
+      case 'datetime':
+        return formatDatePattern(params.expiresAt, input.pattern ?? DEFAULT_CARDLESS_DATE_PATTERN);
+      default:
+        return input.value;
+    }
+  }
+
+  const cardless: CardlessModule = {
+    async form() {
+      return parseCardlessForm(
+        await call('operations/cardless/inputs', { locale: LOCALE_TAG[locale] }),
+      );
+    },
+
+    async list() {
+      return parseCardlessCodes(
+        await call('operations/cardless/list', { locale: LOCALE_TAG[locale], lang: locale }),
+      );
+    },
+
+    async create(params: CardlessCreateParams) {
+      if (!(params.amount > 0)) throw new RangeError('amount must be positive');
+      if (!(params.expiresAt.getTime() > Date.now())) {
+        throw new RangeError('expiresAt must be in the future');
+      }
+      const fields = params.form ?? (await cardless.form());
+      const current = await loadSession();
+      const form: Record<string, string> = {
+        amount: String(params.amount),
+        currency: params.currency ?? 'DZD',
+        locale: LOCALE_TAG[locale],
+      };
+      if (params.source.isCard) form['sourceCard'] = params.source.id;
+      else form['sourceAccount'] = params.source.id;
+      for (const input of fields.inputs) {
+        const value = params.values?.[input.id] ?? cardlessValue(input, params, current);
+        if (value !== null) form[`param.${input.id}`] = value;
+      }
+      const body = await request({
+        method: 'POST',
+        endpoint: 'operations/cardless/generate',
+        params: form,
+        safe: false,
+      });
+      return parseCardlessCode(asRecord(body['operation']));
+    },
+
+    async delete(id: string) {
+      const body = await request({
+        method: 'POST',
+        endpoint: 'operations/cardless/delete',
+        params: { id, locale: LOCALE_TAG[locale] },
+        safe: false,
+      });
+      const operation = asRecord(body['operation']);
+      return Object.keys(operation).length === 0 ? null : parseCardlessCode(operation);
+    },
+  };
+
   const profile: ProfileModule = {
     async get() {
       return parseProfile(await request({ method: 'GET', endpoint: 'profile' }));
@@ -887,6 +987,7 @@ export function createBaridiMob(config: BaridiMobConfig = {}): BaridiMobClient {
     payments,
     transfers,
     receipts,
+    cardless,
     profile,
     exportSession,
     importSession,

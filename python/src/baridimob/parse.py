@@ -9,9 +9,15 @@ from .types import (
     Account,
     Card,
     CardLimit,
+    CardlessCode,
+    CardlessForm,
+    CardlessInput,
+    DynamicAmount,
+    DynamicAmountChoice,
     DynamicCheckResult,
     DynamicChoice,
     DynamicCompleteResult,
+    DynamicDetail,
     DynamicExecResult,
     DynamicGroup,
     DynamicOperationInfo,
@@ -350,46 +356,132 @@ def parse_dynamic_operation(body: dict[str, Any]) -> DynamicOperationInfo:
     )
 
 
+def _setting_flag(value: Any) -> bool:
+    """A setting sent as true/false, "true"/"false" or 0/1."""
+    if value is True or value == "true":
+        return True
+    number = as_number(value)
+    return number is not None and number != 0
+
+
+def _parse_amount(value: Any, currency: str | None = None) -> DynamicAmount | None:
+    if isinstance(value, dict):
+        raw = as_record(value)
+        inner = raw.get("amount")
+        if inner is None:
+            inner = raw.get("sum")
+        if inner is None:
+            inner = raw.get("value")
+        text = as_string(inner)
+        if text is None or text.strip() == "":
+            return None
+        return DynamicAmount(text.strip(), as_string(raw.get("currency")) or currency)
+    text = as_string(value)
+    if text is None or text.strip() == "":
+        return None
+    return DynamicAmount(text.strip(), currency)
+
+
 def parse_step_input(value: Any) -> DynamicStepInput:
     raw = as_record(value)
     settings = as_record(raw.get("settings"))
-    required = (
-        raw.get("required") is True
-        or settings.get("required") is True
-        or settings.get("required") == "true"
-    )
-    choices = [
-        DynamicChoice(
-            value=as_string(as_record(item).get("value")) or "",
-            label=as_string(as_record(item).get("label")) or "",
-        )
-        for item in as_list(raw.get("selectionList"))
-    ]
+    kind = as_string(raw.get("type")) or ""
+    money = kind == "money"
+    prefilled: str | None = None
+    if not money:
+        prefilled = as_string(raw.get("value"))
+        if not prefilled:
+            if kind == "hidden":
+                prefilled = as_string(settings.get("value")) or prefilled
+            elif kind in ("string", "phone"):
+                prefilled = as_string(settings.get("defaultValue")) or prefilled
+    choices: list[DynamicChoice] = []
+    amount_choices: list[DynamicAmountChoice] = []
+    for item in as_list(raw.get("selectionList")):
+        entry = as_record(item)
+        if money:
+            amount = _parse_amount(entry.get("value"))
+            if amount is not None:
+                amount_choices.append(
+                    DynamicAmountChoice(as_string(entry.get("label")) or amount.text, amount)
+                )
+        else:
+            choices.append(
+                DynamicChoice(
+                    value=as_string(entry.get("value")) or "",
+                    label=as_string(entry.get("label")) or "",
+                )
+            )
     access_attributes = [
         text
         for text in (as_string(item) for item in as_list(raw.get("accessAttributes")))
         if text is not None
     ]
+    ordinal = as_number(raw.get("ordinalNumber"))
+    mode = str(settings.get("mode") or "").upper()
     return DynamicStepInput(
         id=as_string(raw.get("id")) or "",
         label=as_string(raw.get("label")) or "",
-        type=as_string(raw.get("type")) or "",
-        required=required,
+        type=kind,
+        required=_setting_flag(raw.get("required")) or _setting_flag(settings.get("required")),
         settings=raw.get("settings"),
         choices=choices,
         access_attributes=access_attributes,
+        value=prefilled,
+        amount=_parse_amount(raw.get("value")) if money else None,
+        amount_mode="select" if money and mode == "SELECT" else "input",
+        amount_choices=amount_choices,
+        readonly=_setting_flag(settings.get("readonly")) or _setting_flag(raw.get("readOnly")),
+        ordinal_number=None if ordinal is None else int(ordinal),
+        description=as_string(raw.get("description")),
         raw=raw,
     )
 
 
 def parse_dynamic_step(body: dict[str, Any]) -> DynamicStep:
-    raw = as_record(body.get("currentStep"))
+    """Parses a step; its fields come in the order of their ``ordinalNumber``,
+    and a response without a step is ``done``."""
+    current = body.get("currentStep")
+    if not isinstance(current, dict):
+        return DynamicStep(id="", label="", inputs=[], done=True, raw=body)
+    raw = as_record(current)
+    inputs = [parse_step_input(item) for item in as_list(raw.get("inputs"))]
+    # A stable sort, as the official app's comparator (no number counts as 0).
+    inputs.sort(key=lambda item: item.ordinal_number or 0)
     return DynamicStep(
         id=as_string(raw.get("id")) or "",
         label=as_string(raw.get("label")) or "",
-        inputs=[parse_step_input(item) for item in as_list(raw.get("inputs"))],
+        inputs=inputs,
         raw=raw,
     )
+
+
+def parse_dynamic_details(value: Any) -> list[DynamicDetail]:
+    details: list[DynamicDetail] = []
+    for item in as_list(value):
+        raw = as_record(item)
+        if not raw:
+            continue
+        kind = as_string(raw.get("type")) or ""
+        content = raw.get("value")
+        money = kind == "money"
+        if money:
+            text = None
+        elif isinstance(content, bool):
+            text = "true" if content else "false"
+        else:
+            text = as_string(content)
+        details.append(
+            DynamicDetail(
+                id=as_string(raw.get("id")) or "",
+                label=as_string(raw.get("label")) or "",
+                type=kind,
+                text=text,
+                amount=_parse_amount(content) if money else None,
+                raw=raw,
+            )
+        )
+    return details
 
 
 def parse_dynamic_check(body: dict[str, Any]) -> DynamicCheckResult:
@@ -399,6 +491,7 @@ def parse_dynamic_check(body: dict[str, Any]) -> DynamicCheckResult:
         fee=as_number(body.get("fee")),
         currency=as_string(body.get("currency")),
         plan_date=as_string(body.get("planDate")),
+        details=parse_dynamic_details(body.get("details")),
         raw=body,
     )
 
@@ -410,6 +503,10 @@ def parse_dynamic_exec(body: dict[str, Any]) -> DynamicExecResult:
         recent_op_type=as_string(body.get("recentOpType")),
         authid=as_string(body.get("authid")),
         confirmation_type=as_string(as_record(body.get("confirmReq")).get("type")),
+        status=as_string(as_record(body.get("operationStatus")).get("type")),
+        fee=as_number(body.get("fee")),
+        currency=as_string(body.get("currency")),
+        details=parse_dynamic_details(body.get("details")),
         raw=body,
     )
 
@@ -421,3 +518,106 @@ def parse_dynamic_complete(body: dict[str, Any]) -> DynamicCompleteResult:
         authid=as_string(body.get("authid")),
         raw=body,
     )
+
+
+def _parse_cardless_input(value: Any) -> CardlessInput:
+    raw = as_record(value)
+    settings = as_record(raw.get("settings"))
+    return CardlessInput(
+        id=as_string(raw.get("id")) or "",
+        label=as_string(raw.get("label")) or "",
+        type=as_string(raw.get("type")) or "",
+        description=as_string(raw.get("description")),
+        required=_setting_flag(raw.get("required")) or _setting_flag(settings.get("required")),
+        readonly=_setting_flag(raw.get("readOnly")) or _setting_flag(settings.get("readonly")),
+        value=as_string(raw.get("value")) or as_string(settings.get("value")),
+        stereotype=as_string(raw.get("stereotype")),
+        pattern=as_string(raw.get("pattern")),
+        future=_setting_flag(raw.get("future")),
+        choices=[
+            DynamicChoice(
+                value=as_string(as_record(item).get("value")) or "",
+                label=as_string(as_record(item).get("label")) or "",
+            )
+            for item in as_list(raw.get("selectionList"))
+        ],
+        raw=raw,
+    )
+
+
+def parse_cardless_form(body: dict[str, Any]) -> CardlessForm:
+    return CardlessForm(
+        inputs=[_parse_cardless_input(item) for item in as_list(body.get("inputs"))],
+        raw=body,
+    )
+
+
+def parse_cardless_code(raw: dict[str, Any]) -> CardlessCode:
+    return CardlessCode(
+        id=as_string(raw.get("id")) or "",
+        code=as_string(raw.get("code")),
+        amount=as_number(raw.get("amount")),
+        currency=as_string(raw.get("currency")),
+        status=as_string(raw.get("status")),
+        details=parse_dynamic_details(raw.get("additionalData")),
+        raw=raw,
+    )
+
+
+def parse_cardless_codes(body: dict[str, Any]) -> list[CardlessCode]:
+    return [
+        parse_cardless_code(as_record(item))
+        for item in as_list(body.get("operations"))
+        if as_record(item)
+    ]
+
+
+DEFAULT_CARDLESS_DATE_PATTERN = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
+
+
+def format_date_pattern(value: datetime, pattern: str) -> str:
+    """Formats ``value`` in Algeria time (UTC+1) with a Java date pattern:
+    ``yyyy MM dd HH mm ss SSS``, an offset (``XXX``, ``Z``) and quoted
+    literals. A naive datetime is read as Algeria time."""
+    moment = value if value.tzinfo is not None else value.replace(tzinfo=ALGIERS)
+    local = moment.astimezone(ALGIERS)
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        letter = pattern[i]
+        if letter == "'":
+            end = pattern.find("'", i + 1)
+            if end < 0:
+                out.append(pattern[i + 1 :])
+                break
+            out.append("'" if end == i + 1 else pattern[i + 1 : end])
+            i = end + 1
+            continue
+        j = i
+        while j < len(pattern) and pattern[j] == letter:
+            j += 1
+        width = j - i
+        if letter == "y":
+            out.append(
+                str(local.year % 100).zfill(2) if width == 2 else str(local.year).zfill(width)
+            )
+        elif letter == "M":
+            out.append(str(local.month).zfill(width))
+        elif letter == "d":
+            out.append(str(local.day).zfill(width))
+        elif letter == "H":
+            out.append(str(local.hour).zfill(width))
+        elif letter == "m":
+            out.append(str(local.minute).zfill(width))
+        elif letter == "s":
+            out.append(str(local.second).zfill(width))
+        elif letter == "S":
+            out.append(str(local.microsecond // 1000).zfill(width))
+        elif letter == "X":
+            out.append("+01" if width == 1 else ("+0100" if width == 2 else "+01:00"))
+        elif letter == "Z":
+            out.append("+01:00" if width >= 5 else "+0100")
+        else:
+            out.append(pattern[i:j])
+        i = j
+    return "".join(out)

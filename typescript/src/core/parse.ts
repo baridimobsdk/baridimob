@@ -2,15 +2,23 @@ import type {
   Account,
   Card,
   CardLimit,
+  CardlessCode,
+  CardlessForm,
+  CardlessInput,
+  DynamicAmount,
+  DynamicAmountChoice,
   DynamicCheckResult,
   DynamicChoice,
   DynamicCompleteResult,
+  DynamicDetail,
   DynamicExecResult,
   DynamicGroup,
+  DynamicInputValuesOptions,
   DynamicOperationInfo,
   DynamicOperationRef,
   DynamicStep,
   DynamicStepInput,
+  DynamicValuesOptions,
   PaymentCategory,
   PaymentProvider,
   Profile,
@@ -287,49 +295,214 @@ export function parseDynamicOperation(body: Record<string, unknown>): DynamicOpe
   };
 }
 
+// A setting sent as true/false, "true"/"false" or 0/1.
+function settingFlag(value: unknown): boolean {
+  if (value === true || value === 'true') return true;
+  const number = asNumber(value);
+  return number !== null && number !== 0;
+}
+
+function amountOf(text: string, currency: string | null): DynamicAmount {
+  const trimmed = text.trim();
+  const value = trimmed === '' ? Number.NaN : Number(trimmed.replace(/,/g, '.'));
+  return { text: trimmed, currency, value: Number.isFinite(value) ? value : null };
+}
+
+function parseAmount(value: unknown, currency: string | null = null): DynamicAmount | null {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const raw = asRecord(value);
+    const text = asString(raw['amount'] ?? raw['sum'] ?? raw['value']);
+    if (text === null || text.trim() === '') return null;
+    return amountOf(text, asString(raw['currency']) ?? currency);
+  }
+  const text = asString(value);
+  if (text === null || text.trim() === '') return null;
+  return amountOf(text, currency);
+}
+
+function valueKey(input: DynamicStepInput, name: string, fallback: string): string {
+  const key = input.setting(name);
+  return key === null || key === '' ? fallback : key;
+}
+
+function inputValues(
+  input: DynamicStepInput,
+  options: DynamicInputValuesOptions,
+): Record<string, string> {
+  switch (input.type) {
+    case 'hidden':
+      return { [input.id]: input.value ?? '' };
+    case 'source_storage': {
+      const source = options.source;
+      if (!source) return {};
+      return {
+        [valueKey(input, 'idKey', 'sourceId')]: source.id,
+        [valueKey(input, 'typeKey', 'sourceType')]: source.type,
+      };
+    }
+    case 'money': {
+      const typed = options.entered?.trim();
+      const chosen = input.readonly
+        ? input.amount
+        : (options.amount ??
+          (typed !== undefined && typed !== '' ? amountOf(typed, null) : input.amount));
+      if (!chosen || chosen.text.trim() === '') return {};
+      return {
+        [valueKey(input, 'amountKey', 'amount')]: chosen.text.trim(),
+        [valueKey(input, 'currencyKey', 'currency')]:
+          chosen.currency ?? input.amount?.currency ?? input.setting('defaultCurrency') ?? 'DZD',
+      };
+    }
+    case 'string':
+    case 'phone':
+    case 'text':
+    case 'email':
+    case 'select':
+    case 'datetime':
+    case 'monthyear': {
+      const text = input.readonly ? input.value : (options.entered ?? input.value);
+      if (text === null || text === '') return {};
+      return { [input.id]: text };
+    }
+    default:
+      return {};
+  }
+}
+
 function parseStepInput(value: unknown): DynamicStepInput {
   const raw = asRecord(value);
   const settings = asRecord(raw['settings']);
-  const required =
-    raw['required'] === true || settings['required'] === true || settings['required'] === 'true';
-  const choices: DynamicChoice[] = asArray(raw['selectionList']).map((item) => {
-    const choice = asRecord(item);
-    return {
-      value: asString(choice['value']) ?? '',
-      label: asString(choice['label']) ?? '',
-    };
-  });
-  return {
+  const type = asString(raw['type']) ?? '';
+  const money = type === 'money';
+  let prefilled: string | null = null;
+  if (!money) {
+    prefilled = asString(raw['value']);
+    if (prefilled === null || prefilled === '') {
+      if (type === 'hidden') prefilled = asString(settings['value']) ?? prefilled;
+      else if (type === 'string' || type === 'phone') {
+        prefilled = asString(settings['defaultValue']) ?? prefilled;
+      }
+    }
+  }
+  const setting = (key: string): string | null => {
+    const item = settings[key];
+    if (typeof item === 'string') return item;
+    if (typeof item === 'number' || typeof item === 'boolean') return String(item);
+    return null;
+  };
+  const amountChoices: DynamicAmountChoice[] = [];
+  const choices: DynamicChoice[] = [];
+  for (const item of asArray(raw['selectionList'])) {
+    const entry = asRecord(item);
+    if (money) {
+      const amount = parseAmount(entry['value']);
+      if (amount) amountChoices.push({ label: asString(entry['label']) ?? amount.text, amount });
+    } else {
+      choices.push({
+        value: asString(entry['value']) ?? '',
+        label: asString(entry['label']) ?? '',
+      });
+    }
+  }
+  const ordinal = asNumber(raw['ordinalNumber']);
+  const input: DynamicStepInput = {
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
-    type: asString(raw['type']) ?? '',
-    required,
+    type,
+    required: settingFlag(raw['required']) || settingFlag(settings['required']),
     settings: raw['settings'] ?? null,
     choices,
     accessAttributes: asArray(raw['accessAttributes'])
       .map((item) => asString(item))
       .filter((item): item is string => item !== null),
+    value: prefilled,
+    amount: money ? parseAmount(raw['value']) : null,
+    amountMode:
+      money && String(settings['mode'] ?? '').toUpperCase() === 'SELECT' ? 'select' : 'input',
+    amountChoices,
+    readonly: settingFlag(settings['readonly']) || settingFlag(raw['readOnly']),
+    ordinalNumber: ordinal === null ? null : Math.trunc(ordinal),
+    description: asString(raw['description']),
+    isHidden: type === 'hidden',
+    isSource: type === 'source_storage',
+    isMoney: money,
+    isSelect: type === 'select',
+    setting,
+    valuesFor: (options = {}) => inputValues(input, options),
     raw,
   };
+  return input;
+}
+
+function stepValues(
+  inputs: DynamicStepInput[],
+  options: DynamicValuesOptions,
+): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const input of inputs) {
+    const entered = options.entered?.[input.id];
+    Object.assign(
+      values,
+      input.valuesFor({
+        ...(entered === undefined ? {} : { entered }),
+        ...(options.source === undefined ? {} : { source: options.source }),
+        ...(options.amount === undefined ? {} : { amount: options.amount }),
+      }),
+    );
+  }
+  return values;
 }
 
 export function parseDynamicStep(body: Record<string, unknown>): DynamicStep {
-  const raw = asRecord(body['currentStep']);
+  const current = body['currentStep'];
+  if (typeof current !== 'object' || current === null || Array.isArray(current)) {
+    return { id: '', label: '', inputs: [], done: true, values: () => ({}), raw: body };
+  }
+  const raw = asRecord(current);
+  // A stable sort, as the official app's comparator (no number counts as 0).
+  const inputs = asArray(raw['inputs'])
+    .map(parseStepInput)
+    .sort((a, b) => (a.ordinalNumber ?? 0) - (b.ordinalNumber ?? 0));
   return {
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
-    inputs: asArray(raw['inputs']).map(parseStepInput),
+    inputs,
+    done: false,
+    values: (options = {}) => stepValues(inputs, options),
     raw,
   };
 }
 
+export function parseDynamicDetails(value: unknown): DynamicDetail[] {
+  const details: DynamicDetail[] = [];
+  for (const item of asArray(value)) {
+    const raw = asRecord(item);
+    if (Object.keys(raw).length === 0) continue;
+    const type = asString(raw['type']) ?? '';
+    const money = type === 'money';
+    const content = raw['value'];
+    details.push({
+      id: asString(raw['id']) ?? '',
+      label: asString(raw['label']) ?? '',
+      type,
+      text: money ? null : typeof content === 'boolean' ? String(content) : asString(content),
+      amount: money ? parseAmount(content) : null,
+      raw,
+    });
+  }
+  return details;
+}
+
 export function parseDynamicCheck(body: Record<string, unknown>): DynamicCheckResult {
+  const details = parseDynamicDetails(body['details']);
   return {
     transRef: asString(body['transRef']) ?? '',
     confirmationType: asString(asRecord(body['confirmReq'])['type']),
     fee: asNumber(body['fee']),
     currency: asString(body['currency']),
     planDate: asString(body['planDate']),
+    details,
+    amount: details.find((detail) => detail.amount !== null)?.amount ?? null,
     raw: body,
   };
 }
@@ -341,6 +514,10 @@ export function parseDynamicExec(body: Record<string, unknown>): DynamicExecResu
     recentOpType: asString(body['recentOpType']),
     authid: asString(body['authid']),
     confirmationType: asString(asRecord(body['confirmReq'])['type']),
+    status: asString(asRecord(body['operationStatus'])['type']),
+    fee: asNumber(body['fee']),
+    currency: asString(body['currency']),
+    details: parseDynamicDetails(body['details']),
     raw: body,
   };
 }
@@ -352,4 +529,112 @@ export function parseDynamicComplete(body: Record<string, unknown>): DynamicComp
     authid: asString(body['authid']),
     raw: body,
   };
+}
+
+function parseCardlessInput(value: unknown): CardlessInput {
+  const raw = asRecord(value);
+  const settings = asRecord(raw['settings']);
+  return {
+    id: asString(raw['id']) ?? '',
+    label: asString(raw['label']) ?? '',
+    type: asString(raw['type']) ?? '',
+    description: asString(raw['description']),
+    required: settingFlag(raw['required']) || settingFlag(settings['required']),
+    readonly: settingFlag(raw['readOnly']) || settingFlag(settings['readonly']),
+    value: asString(raw['value']) ?? asString(settings['value']),
+    stereotype: asString(raw['stereotype']),
+    pattern: asString(raw['pattern']),
+    future: settingFlag(raw['future']),
+    choices: asArray(raw['selectionList']).map((item) => {
+      const entry = asRecord(item);
+      return { value: asString(entry['value']) ?? '', label: asString(entry['label']) ?? '' };
+    }),
+    raw,
+  };
+}
+
+export function parseCardlessForm(body: Record<string, unknown>): CardlessForm {
+  const inputs = asArray(body['inputs']).map(parseCardlessInput);
+  const select = inputs.find((input) => input.type === 'select' && input.choices.length > 0);
+  return { inputs, types: select?.choices ?? [], raw: body };
+}
+
+export function parseCardlessCode(raw: Record<string, unknown>): CardlessCode {
+  return {
+    id: asString(raw['id']) ?? '',
+    code: asString(raw['code']),
+    amount: asNumber(raw['amount']),
+    currency: asString(raw['currency']),
+    status: asString(raw['status']),
+    details: parseDynamicDetails(raw['additionalData']),
+    raw,
+  };
+}
+
+export function parseCardlessCodes(body: Record<string, unknown>): CardlessCode[] {
+  return asArray(body['operations'])
+    .map((item) => asRecord(item))
+    .filter((raw) => Object.keys(raw).length > 0)
+    .map(parseCardlessCode);
+}
+
+export const DEFAULT_CARDLESS_DATE_PATTERN = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+
+const ALGERIA_OFFSET_MS = 60 * 60 * 1000;
+
+export function formatDatePattern(date: Date, pattern: string): string {
+  const local = new Date(date.getTime() + ALGERIA_OFFSET_MS);
+  const pad = (value: number, width: number) => String(value).padStart(width, '0');
+  let out = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const letter = pattern.charAt(i);
+    if (letter === "'") {
+      const end = pattern.indexOf("'", i + 1);
+      if (end < 0) {
+        out += pattern.slice(i + 1);
+        break;
+      }
+      out += end === i + 1 ? "'" : pattern.slice(i + 1, end);
+      i = end + 1;
+      continue;
+    }
+    let j = i;
+    while (j < pattern.length && pattern.charAt(j) === letter) j += 1;
+    const width = j - i;
+    switch (letter) {
+      case 'y':
+        out +=
+          width === 2 ? pad(local.getUTCFullYear() % 100, 2) : pad(local.getUTCFullYear(), width);
+        break;
+      case 'M':
+        out += pad(local.getUTCMonth() + 1, width);
+        break;
+      case 'd':
+        out += pad(local.getUTCDate(), width);
+        break;
+      case 'H':
+        out += pad(local.getUTCHours(), width);
+        break;
+      case 'm':
+        out += pad(local.getUTCMinutes(), width);
+        break;
+      case 's':
+        out += pad(local.getUTCSeconds(), width);
+        break;
+      case 'S':
+        out += pad(local.getUTCMilliseconds(), width);
+        break;
+      case 'X':
+        out += width === 1 ? '+01' : width === 2 ? '+0100' : '+01:00';
+        break;
+      case 'Z':
+        out += width >= 5 ? '+01:00' : '+0100';
+        break;
+      default:
+        out += pattern.slice(i, j);
+    }
+    i = j;
+  }
+  return out;
 }

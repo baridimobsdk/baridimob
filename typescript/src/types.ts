@@ -316,6 +316,47 @@ export interface DynamicChoice {
   label: string;
 }
 
+export interface DynamicAmount {
+  text: string;
+  currency: string | null;
+  value: number | null;
+}
+
+export type DynamicAmountMode = 'input' | 'select';
+
+export interface DynamicAmountChoice {
+  label: string;
+  amount: DynamicAmount;
+}
+
+export interface DynamicSource {
+  id: string;
+  type: string;
+}
+
+export const DynamicSource = {
+  cardType: 'CLIENT_CARD_ID',
+  accountType: 'ACCOUNT_NUMBER',
+  card(id: string): DynamicSource {
+    return { id, type: 'CLIENT_CARD_ID' };
+  },
+  account(number: string): DynamicSource {
+    return { id: number, type: 'ACCOUNT_NUMBER' };
+  },
+} as const;
+
+export interface DynamicInputValuesOptions {
+  entered?: string;
+  source?: DynamicSource;
+  amount?: DynamicAmount;
+}
+
+export interface DynamicValuesOptions {
+  entered?: Record<string, string>;
+  source?: DynamicSource;
+  amount?: DynamicAmount;
+}
+
 export interface DynamicStepInput {
   id: string;
   label: string;
@@ -324,6 +365,19 @@ export interface DynamicStepInput {
   settings: unknown;
   choices: DynamicChoice[];
   accessAttributes: string[];
+  value: string | null;
+  amount: DynamicAmount | null;
+  amountMode: DynamicAmountMode;
+  amountChoices: DynamicAmountChoice[];
+  readonly: boolean;
+  ordinalNumber: number | null;
+  description: string | null;
+  isHidden: boolean;
+  isSource: boolean;
+  isMoney: boolean;
+  isSelect: boolean;
+  setting(key: string): string | null;
+  valuesFor(options?: DynamicInputValuesOptions): Record<string, string>;
   raw: Record<string, unknown>;
 }
 
@@ -331,6 +385,17 @@ export interface DynamicStep {
   id: string;
   label: string;
   inputs: DynamicStepInput[];
+  done: boolean;
+  values(options?: DynamicValuesOptions): Record<string, string>;
+  raw: Record<string, unknown>;
+}
+
+export interface DynamicDetail {
+  id: string;
+  label: string;
+  type: string;
+  text: string | null;
+  amount: DynamicAmount | null;
   raw: Record<string, unknown>;
 }
 
@@ -340,6 +405,8 @@ export interface DynamicCheckResult {
   fee: number | null;
   currency: string | null;
   planDate: string | null;
+  details: DynamicDetail[];
+  amount: DynamicAmount | null;
   raw: Record<string, unknown>;
 }
 
@@ -349,6 +416,10 @@ export interface DynamicExecResult {
   recentOpType: string | null;
   authid: string | null;
   confirmationType: string | null;
+  status: string | null;
+  fee: number | null;
+  currency: string | null;
+  details: DynamicDetail[];
   raw: Record<string, unknown>;
 }
 
@@ -387,6 +458,68 @@ export interface DynamicCompleteParams {
   operationId: string | number;
   transRef: string;
   confirmVal: string;
+}
+
+export interface CardlessInput {
+  id: string;
+  label: string;
+  type: string;
+  description: string | null;
+  required: boolean;
+  readonly: boolean;
+  value: string | null;
+  stereotype: string | null;
+  pattern: string | null;
+  future: boolean;
+  choices: DynamicChoice[];
+  raw: Record<string, unknown>;
+}
+
+export interface CardlessForm {
+  inputs: CardlessInput[];
+  types: DynamicChoice[];
+  raw: Record<string, unknown>;
+}
+
+export interface CardlessSource {
+  id: string;
+  isCard: boolean;
+}
+
+export const CardlessSource = {
+  account(id: string): CardlessSource {
+    return { id, isCard: false };
+  },
+  card(id: string): CardlessSource {
+    return { id, isCard: true };
+  },
+} as const;
+
+export interface CardlessCode {
+  id: string;
+  code: string | null;
+  amount: number | null;
+  currency: string | null;
+  status: string | null;
+  details: DynamicDetail[];
+  raw: Record<string, unknown>;
+}
+
+export interface CardlessCreateParams {
+  amount: number;
+  source: CardlessSource;
+  expiresAt: Date;
+  type?: string;
+  currency?: string;
+  form?: CardlessForm;
+  values?: Record<string, string>;
+}
+
+export interface CardlessModule {
+  form(): Promise<CardlessForm>;
+  list(): Promise<CardlessCode[]>;
+  create(params: CardlessCreateParams): Promise<CardlessCode>;
+  delete(id: string): Promise<CardlessCode | null>;
 }
 
 export interface TransferStrategiesParams {
@@ -453,6 +586,7 @@ export interface BaridiMobClient {
   payments: PaymentsModule;
   transfers: TransfersModule;
   receipts: ReceiptsModule;
+  cardless: CardlessModule;
   profile: ProfileModule;
   exportSession(): Promise<StoredSession | null>;
   importSession(session: StoredSession): Promise<void>;

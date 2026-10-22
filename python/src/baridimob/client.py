@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
@@ -27,6 +27,12 @@ from .http import (
 )
 from .keys import algorithm_hash, generate_device_keys, sha256_hex
 from .parse import (
+    DEFAULT_CARDLESS_DATE_PATTERN,
+    ALGIERS,
+    format_date_pattern,
+    parse_cardless_code,
+    parse_cardless_codes,
+    parse_cardless_form,
     day_bounds,
     is_within_bounds,
     parse_account_response,
@@ -51,6 +57,10 @@ from .result import as_record, result_code_of
 from .sign import sign_json_body, sign_params
 from .storage import MemoryStorage
 from .types import (
+    CardlessCode,
+    CardlessForm,
+    CardlessInput,
+    CardlessSource,
     Account,
     Card,
     CardLimit,
@@ -149,6 +159,7 @@ class BaridiMob:
         self.payments = _Payments(self)
         self.transfers = _Transfers(self)
         self.receipts = _Receipts(self)
+        self.cardless = _Cardless(self)
         self.profile = _Profile(self)
 
     def _load_session(self) -> StoredSession | None:
@@ -946,6 +957,110 @@ class _Transfers:
                 amount, source_id, target_id, armed.trans_ref, otp, currency
             ),
         )
+
+
+class _Cardless:
+    """Cash withdrawals without a card: codes to type at an ATM."""
+
+    def __init__(self, client: BaridiMob):
+        self._client = client
+
+    def _locale_tag(self) -> str:
+        return LOCALE_TAG.get(self._client.config.locale, "ar_DZ")
+
+    def form(self) -> CardlessForm:
+        return parse_cardless_form(
+            self._client._get("operations/cardless/inputs", {"locale": self._locale_tag()})
+        )
+
+    def list(self) -> list[CardlessCode]:
+        return parse_cardless_codes(
+            self._client._get(
+                "operations/cardless/list",
+                {"locale": self._locale_tag(), "lang": self._client.config.locale},
+            )
+        )
+
+    def create(
+        self,
+        amount: float,
+        source: CardlessSource,
+        expires_at: datetime,
+        type: str | None = None,
+        currency: str = "DZD",
+        form: CardlessForm | None = None,
+        values: dict[str, str] | None = None,
+    ) -> CardlessCode:
+        """Creates a code for ``amount`` dinars from ``source``, valid until
+        ``expires_at`` (less than six months). Never retried automatically."""
+        if not amount > 0:
+            raise ValueError("amount must be positive")
+        moment = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=ALGIERS)
+        if moment <= datetime.now(timezone.utc):
+            raise ValueError("expires_at must be in the future")
+        fields = form if form is not None else self.form()
+        session = self._client._load_session()
+        params = {
+            "amount": str(amount),
+            "currency": currency,
+            "locale": self._locale_tag(),
+            ("sourceCard" if source.is_card else "sourceAccount"): source.id,
+        }
+        for item in fields.inputs:
+            value = (values or {}).get(item.id)
+            if value is None:
+                value = self._value(item, type, moment, session)
+            if value is not None:
+                params[f"param.{item.id}"] = value
+        body = self._client._request(
+            _RequestSpec(
+                method="POST",
+                endpoint="operations/cardless/generate",
+                params=params,
+                safe=False,
+            )
+        )
+        return parse_cardless_code(as_record(body.get("operation")))
+
+    def delete(self, operation_id: str) -> CardlessCode | None:
+        body = self._client._request(
+            _RequestSpec(
+                method="POST",
+                endpoint="operations/cardless/delete",
+                params={"id": operation_id, "locale": self._locale_tag()},
+                safe=False,
+            )
+        )
+        operation = as_record(body.get("operation"))
+        return parse_cardless_code(operation) if operation else None
+
+    @staticmethod
+    def _value(
+        item: CardlessInput,
+        type: str | None,
+        expires_at: datetime,
+        session: StoredSession | None,
+    ) -> str | None:
+        if item.type == "hidden":
+            # Sent back as BaridiMob wrote it; a blank value with a device
+            # stereotype takes this device's data, as in the official app.
+            value = item.value or ""
+            if value.strip() or session is None:
+                return value
+            return {
+                "deviceId": session.devid,
+                "devicePublicKey": session.devkey,
+                "devicePublicKeyAlgorithm": session.devkey_algorithm,
+            }.get(item.stereotype or "", value)
+        if item.type == "select":
+            if type is not None and any(choice.value == type for choice in item.choices):
+                return type
+            if item.value is not None:
+                return item.value
+            return item.choices[0].value if item.choices else None
+        if item.type == "datetime":
+            return format_date_pattern(expires_at, item.pattern or DEFAULT_CARDLESS_DATE_PATTERN)
+        return item.value
 
 
 class _Receipts:

@@ -111,6 +111,9 @@ class BaridiMob {
   /// Recent operations and PDF receipts.
   late final ReceiptsModule receipts = ReceiptsModule._(this);
 
+  /// Cash withdrawals without a card: codes to type at an ATM.
+  late final CardlessModule cardless = CardlessModule._(this);
+
   /// Holder information.
   late final ProfileModule profile = ProfileModule._(this);
 
@@ -824,7 +827,11 @@ class DynamicPaymentsModule {
   /// step.
   ///
   /// [currentStepKey] is the `id` of the step being filled; omit it for the
-  /// first call with a fresh operation.
+  /// first call with a fresh operation. [params] are every value so far:
+  /// build each step's with [DynamicStep.values] (it adds the hidden values
+  /// BaridiMob needs, such as `billerServiceCode=FACTURE` for Algérie
+  /// Télécom bills) and merge them. When the form is complete the next step
+  /// is [DynamicStep.done]: call [check].
   Future<DynamicStep> step(
     String operationId, [
     Map<String, Object?> params = const {},
@@ -841,7 +848,14 @@ class DynamicPaymentsModule {
       )));
 
   /// Validates the operation [operationId] with the filled [params] and
-  /// returns the reference needed by [exec].
+  /// returns the reference needed by [exec], with what BaridiMob says about
+  /// the operation in [DynamicCheckResult.details] (for a bill: subscriber,
+  /// bill, amount due). No money moves and no SMS is sent.
+  ///
+  /// [params] are every value of every step. The payment source goes under
+  /// its field's `idKey`/`typeKey` with a [DynamicSource] type
+  /// (`CLIENT_CARD_ID` for a card): BaridiMob answers result 2 to the `1` of
+  /// `payments.check`.
   Future<DynamicCheckResult> check(
     String operationId, [
     Map<String, String> params = const {},
@@ -902,6 +916,119 @@ class DynamicPaymentsModule {
           'confirmVal': confirmVal,
         },
       )));
+}
+
+/// Cash withdrawals without a card. A code is created for an amount and an
+/// expiry; at an Algérie Poste ATM, the code takes the cash out.
+///
+/// ```dart
+/// final code = await bm.cardless.create(
+///   amount: 2000,
+///   source: CardlessSource.account(account.id),
+///   expiresAt: DateTime.now().add(const Duration(days: 1)),
+/// );
+/// print('${code.code} (authorisation ${code.id})');
+/// ```
+class CardlessModule {
+  CardlessModule._(this._client);
+
+  final BaridiMob _client;
+
+  /// The form of a new code: the kinds of withdrawal, the expiry field and
+  /// the hidden data BaridiMob signs for this request.
+  Future<CardlessForm> form() async => parseCardlessForm(await _client
+      ._get('operations/cardless/inputs', {'locale': _client.locale.tag}));
+
+  /// The codes not used yet.
+  Future<List<CardlessCode>> list() async =>
+      parseCardlessCodes(await _client._get('operations/cardless/list', {
+        'locale': _client.locale.tag,
+        'lang': _client.locale.name,
+      }));
+
+  /// Creates a code for [amount] dinars taken from [source], valid until
+  /// [expiresAt] (BaridiMob allows less than six months).
+  ///
+  /// [type] is the kind of withdrawal (`ATM_CASHWITHDRAWAL` by default, the
+  /// first one offered); [values] overrides any field of the [form] by id.
+  /// The form is read again when not given: its hidden data is signed per
+  /// request. Never retried automatically.
+  Future<CardlessCode> create({
+    required num amount,
+    required CardlessSource source,
+    required DateTime expiresAt,
+    String? type,
+    String currency = 'DZD',
+    CardlessForm? form,
+    Map<String, String> values = const {},
+  }) async {
+    if (amount <= 0) {
+      throw ArgumentError.value(amount, 'amount', 'must be positive');
+    }
+    if (!expiresAt.isAfter(DateTime.now())) {
+      throw ArgumentError.value(
+          expiresAt, 'expiresAt', 'must be in the future');
+    }
+    final fields = form ?? await this.form();
+    final session = await _client._loadSession();
+    final params = <String, String>{
+      'amount': numberToString(amount),
+      'currency': currency,
+      'locale': _client.locale.tag,
+      if (source.isCard)
+        'sourceCard': source.id
+      else
+        'sourceAccount': source.id,
+    };
+    for (final input in fields.inputs) {
+      final value = values[input.id] ??
+          switch (input.type) {
+            'hidden' => _hiddenValue(input, session),
+            'select' => (type != null &&
+                    input.choices.any((choice) => choice.value == type))
+                ? type
+                : (input.value ??
+                    (input.choices.isEmpty ? null : input.choices.first.value)),
+            'datetime' => formatDatePattern(
+                expiresAt, input.pattern ?? defaultCardlessDatePattern),
+            _ => input.value,
+          };
+      if (value != null) params['param.${input.id}'] = value;
+    }
+    final body = await _client._request(_RequestSpec(
+      'POST',
+      'operations/cardless/generate',
+      params: params,
+      safe: false,
+    ));
+    return parseCardlessCode(asRecord(body['operation']));
+  }
+
+  /// Deletes the code [id] before it is used. Returns the deleted code when
+  /// BaridiMob sends it back.
+  Future<CardlessCode?> delete(String id) async {
+    final body = await _client._request(_RequestSpec(
+      'POST',
+      'operations/cardless/delete',
+      params: {'id': id, 'locale': _client.locale.tag},
+      safe: false,
+    ));
+    final operation = asRecord(body['operation']);
+    return operation.isEmpty ? null : parseCardlessCode(operation);
+  }
+
+  // A hidden value is sent back as BaridiMob wrote it; a blank one with a
+  // device stereotype takes this device's data, as in the official app.
+  static String _hiddenValue(CardlessInput input, StoredSession? session) {
+    final value = input.value ?? '';
+    if (value.trim().isNotEmpty || session == null) return value;
+    return switch (input.stereotype) {
+      'deviceId' => session.devid,
+      'devicePublicKey' => session.devkey,
+      'devicePublicKeyAlgorithm' => session.devkeyAlgorithm,
+      _ => value,
+    };
+  }
 }
 
 /// Transfers to other accounts.

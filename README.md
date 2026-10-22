@@ -7,7 +7,7 @@
 
 <br>
 
-Read your BaridiMob accounts and cards, verify incoming payments, send transfers and pay bills from your own code.
+Read your BaridiMob accounts and cards, verify incoming payments, send transfers, pay bills and make cardless ATM withdrawals from your own code.
 
 [![npm](https://img.shields.io/npm/v/baridimob?label=npm)](https://www.npmjs.com/package/baridimob)
 [![PyPI](https://img.shields.io/pypi/v/baridimob?label=PyPI)](https://pypi.org/project/baridimob/)
@@ -38,6 +38,7 @@ The SDK is available for three languages. All of them expose the same features w
 | **Payment verification** | Confirm that a customer's transfer has really arrived, by reference number and amount. |
 | **Transfers** | Send money to another account (always confirmed by SMS code). |
 | **Bill payments** | Mobile top-up (Mobilis, Djezzy, Ooredoo) through the static payment flow, and Algérie Télécom, Sonelgaz, ADE, SEAL and other bills through the dynamic FPE form engine. |
+| **Cardless withdrawals** | Create, list and delete a code for cash at an Algérie Poste ATM, without the card. |
 | **Receipts** | List recent operations and download their PDF receipts. |
 
 ## Quick look

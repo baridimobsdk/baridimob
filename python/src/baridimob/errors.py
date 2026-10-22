@@ -9,12 +9,26 @@ class BaridiMobError(Exception):
     pass
 
 
+def _describe(raw: dict[str, Any]) -> str | None:
+    """What BaridiMob said about a refusal, in the session's language."""
+    value = raw.get("description")
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
 class ApiResultError(BaridiMobError):
     def __init__(self, result_code: int, raw: dict[str, Any], message: str | None = None):
-        super().__init__(message or f"BaridiMob result {result_code} ({result_name(result_code)})")
+        super().__init__(
+            message
+            or _describe(raw)
+            or f"BaridiMob result {result_code} ({result_name(result_code)})"
+        )
         self.result_code = result_code
         self.result_name = result_name(result_code)
         self.raw = raw
+        self.description = _describe(raw)
 
 
 class DeviceConfirmationRequiredError(ApiResultError):
@@ -88,7 +102,7 @@ class DeviceFlowError(BaridiMobError):
 
 class ServerError(ApiResultError):
     def __init__(self, result_code: int, raw: dict[str, Any], message: str | None = None):
-        super().__init__(result_code, raw, message or "BaridiMob server error")
+        super().__init__(result_code, raw, message or _describe(raw) or "BaridiMob server error")
 
 
 class NetworkError(BaridiMobError):

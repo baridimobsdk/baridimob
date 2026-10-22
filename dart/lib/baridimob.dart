@@ -16,6 +16,7 @@ export 'src/client.dart'
         AccountsModule,
         AuthModule,
         BaridiMob,
+        CardlessModule,
         CardsModule,
         DynamicPaymentsModule,
         PasswordHasher,

@@ -19,11 +19,15 @@ class BaridiMobError implements Exception {
 }
 
 /// The server answered with a non-zero result code.
+///
+/// When BaridiMob explains itself (for example «لا توجد فواتير غير مدفوعة»,
+/// no unpaid bills), its words are the [message] and the [description].
 class ApiResultError extends BaridiMobError {
   /// Creates an error for [resultCode] with the raw server response.
   ApiResultError(this.resultCode, this.raw, [String? message])
       : resultName = resultNameFor(resultCode),
         super(message ??
+            _describe(raw) ??
             'BaridiMob result $resultCode (${resultNameFor(resultCode)})');
 
   /// Numeric result code returned by the server.
@@ -35,8 +39,19 @@ class ApiResultError extends BaridiMobError {
   /// Raw server response.
   final Map<String, Object?> raw;
 
+  /// What BaridiMob said, in the session's language, or `null` when it gave
+  /// no explanation.
+  String? get description => _describe(raw);
+
   @override
   String get name => 'ApiResultError';
+}
+
+String? _describe(Map<String, Object?> raw) {
+  final value = raw['description'];
+  if (value is! String) return null;
+  final text = value.trim();
+  return text.isEmpty ? null : text;
 }
 
 /// This device is not trusted yet: request an OTP and confirm the device.
@@ -179,7 +194,8 @@ class DeviceFlowError extends BaridiMobError {
 class ServerError extends ApiResultError {
   /// Creates the error.
   ServerError(int resultCode, Map<String, Object?> raw, [String? message])
-      : super(resultCode, raw, message ?? 'BaridiMob server error');
+      : super(resultCode, raw,
+            message ?? _describe(raw) ?? 'BaridiMob server error');
 
   @override
   String get name => 'ServerError';

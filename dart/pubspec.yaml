@@ -1,8 +1,9 @@
 name: baridimob
 description: >-
   Unofficial Dart and Flutter SDK for BaridiMob (Algérie Poste): accounts,
-  payment verification, transfers, bill payments and receipts.
-version: 0.3.0
+  payment verification, transfers, bill payments, cardless withdrawals and
+  receipts.
+version: 0.4.0
 repository: https://github.com/baridimobsdk/baridimob/tree/main/dart
 issue_tracker: https://github.com/baridimobsdk/baridimob/issues
 topics:

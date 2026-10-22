@@ -27,6 +27,7 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 - [Verify an incoming payment](#verify-an-incoming-payment)
 - [Transfers](#transfers)
 - [Bill payments](#bill-payments)
+- [Withdrawals without a card](#withdrawals-without-a-card)
 - [Receipts and profile](#receipts-and-profile)
 - [Session storage](#session-storage)
 - [Configuration](#configuration)
@@ -220,25 +221,33 @@ An account can be named as the source in the API, but BaridiMob refuses it for
 `paymentCheck` (verified live); use a card.
 
 **Bills through the dynamic engine.** Some services (Algérie Télécom, ADE,
-SEAL, Sonelgaz, AADL…) return the form themselves:
+SEAL, Sonelgaz, AADL…) return the form themselves, step by step:
 
 ```ts
+import { DynamicSource } from 'baridimob';
+
 const groups = await bm.payments.dynamic.groups();
 const operation = groups[0]!.operations[0]!;
+const [card] = await bm.cards.list();
+const source = DynamicSource.card(card!.id);
 
-const form = await bm.payments.dynamic.step(operation.id); // first form
-const values = {
-  phone: '0600000000',
-  sourceId: 'card-scid',
-  sourceType: '1',
-  amount: '500',
-  currency: 'DZD',
-};
+// Fill each step until BaridiMob has none left (step.done). values() adds
+// what BaridiMob expects besides what is typed: hidden fields (for an
+// Algérie Télécom bill, billerServiceCode=FACTURE), the payment source and
+// the amount. Later steps send the current step id and every value so far.
+let step = await bm.payments.dynamic.step(operation.id);
+const values: Record<string, string> = {};
+while (!step.done) {
+  Object.assign(values, step.values({ entered: { customerNumber: '044395258' }, source }));
+  step = await bm.payments.dynamic.step(operation.id, values, step.id);
+}
 
-// for a later step, send the current step id and every value so far
-// const next = await bm.payments.dynamic.step(operation.id, values, form.id);
-
+// check() moves no money and sends no SMS; for a bill, its details hold the
+// subscriber, the bill and the amount due.
 const checked = await bm.payments.dynamic.check(operation.id, values);
+for (const detail of checked.details) {
+  console.log(detail.label, detail.amount?.text ?? detail.text);
+}
 await bm.payments.dynamic.requestOtp(checked.transRef);
 const result = await bm.payments.dynamic.exec({
   operationId: operation.id,
@@ -246,16 +255,62 @@ const result = await bm.payments.dynamic.exec({
   otp: '123456',
   params: values,
 });
-console.log(result.recentOpId, result.recentOpType);
+console.log(result.recentOpId, result.status);
 ```
 
-`check()` returns `DynamicCheckResult`; `exec()` returns `DynamicExecResult`.
-`complete()` is for an extra confirmation step (such as 3D Secure) when the
-server asks for one. Values are sent as `param.<id>`.
+- **Payment source:** dynamic forms name it with `DynamicSource`
+  (`CLIENT_CARD_ID` for a card, `ACCOUNT_NUMBER` for an account). BaridiMob
+  answers result 2 to the `1`/`2` of `payments.check`.
+- **Amounts:** a `money` field may come filled (`input.amount`, a bill's amount
+  due) or offer amounts to pick (`input.amountChoices` when
+  `input.amountMode === 'select'`); pass the chosen one as
+  `values({ amount })`. Read-only fields (`input.readonly`) keep BaridiMob's
+  value. Fields come in the order of their `ordinalNumber`.
+- **Refusals** carry BaridiMob's own words, for example
+  «لا توجد فواتير غير مدفوعة» (no unpaid bills): see
+  [Error handling](#error-handling).
 
-> **Not yet verified live:** `check()`, `exec()` and `complete()` use the
-> endpoints of the official app, but their requests have not been tested against
-> the real server yet. `groups()`, `operation()` and `step()` are verified.
+`check()` returns `DynamicCheckResult` (`transRef`, `confirmationType`, `fee`,
+`planDate`, `details`, `amount`); `exec()` returns `DynamicExecResult`
+(`recentOpId`, `recentOpType`, `status`, `details`). `complete()` is for an
+extra confirmation step (such as 3D Secure) when the server asks for one.
+Values are sent as `param.<id>`.
+
+`groups()`, `operation()`, `step()` and `check()` (an internet top-up with a
+card source) are verified against the live server. `exec()` and `complete()`
+use the endpoints of the official app but have not been executed live yet.
+
+## Withdrawals without a card
+
+A cardless code takes cash out of an Algérie Poste ATM without the card.
+
+```ts
+import { CardlessSource } from 'baridimob';
+
+// The codes not used yet.
+for (const code of await bm.cardless.list()) {
+  console.log(code.code, code.amount, code.currency, code.id);
+}
+
+const [account] = await bm.accounts.list();
+const code = await bm.cardless.create({
+  amount: 2000,
+  source: CardlessSource.account(account!.id), // or CardlessSource.card(card.id)
+  expiresAt: new Date(Date.now() + 86_400_000), // less than six months
+});
+console.log(code.code, code.id); // id: the authorisation number
+
+// While it is unused, it can be deleted.
+await bm.cardless.delete(code.id);
+```
+
+`create()` reads the form again each time (its hidden `mb_model` is signed per
+request) and is never retried automatically; the official app asks for no SMS
+code here. Treat `code` like cash.
+
+> **Partly verified live:** `form()` and `list()` are verified. `create()`
+> reached BaridiMob's balance check (an account without funds was refused with
+> «رصيد الحساب غير كافٍ»); `delete()` has not run against a real code yet.
 
 ## Receipts and profile
 
@@ -355,6 +410,10 @@ try {
 | `NetworkError` / `TimeoutError` | Connection problem |
 | `ServerError` | The server returned an error |
 | `ApiResultError` | Any other server error. Inspect `resultCode` and `resultName`. |
+
+When BaridiMob explains a refusal, the error `message` is its own words, in the
+session's language (for example «لا توجد فواتير غير مدفوعة»), also in
+`description`.
 
 ## Security
 

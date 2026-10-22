@@ -309,46 +309,128 @@ DynamicOperationInfo parseDynamicOperation(Map<String, Object?> body) {
   );
 }
 
+/// A setting or flag sent as `true`/`false`, `"true"`/`"false"` or `0`/`1`.
+bool _setting(Object? value) =>
+    value == true || value == 'true' || (asNumber(value) ?? 0) != 0;
+
+/// An amount sent as `{amount, currency}`, a number or a numeric string.
+DynamicAmount? _parseAmount(Object? value, {String? currency}) {
+  if (value is Map) {
+    final raw = asRecord(value);
+    final text = asString(raw['amount'] ?? raw['sum'] ?? raw['value']);
+    if (text == null || text.trim().isEmpty) return null;
+    return DynamicAmount(
+        text: text.trim(), currency: asString(raw['currency']) ?? currency);
+  }
+  final text = asString(value);
+  if (text == null || text.trim().isEmpty) return null;
+  return DynamicAmount(text: text.trim(), currency: currency);
+}
+
 DynamicStepInput _parseStepInput(Object? value) {
   final raw = asRecord(value);
   final settings = asRecord(raw['settings']);
+  final type = asString(raw['type']) ?? '';
   final accessAttributes = <String>[];
   for (final item in asArray(raw['accessAttributes'])) {
     final text = asString(item);
     if (text != null) accessAttributes.add(text);
   }
+  final money = type == 'money';
+  String? prefilled;
+  if (!money) {
+    prefilled = asString(raw['value']);
+    if (prefilled == null || prefilled.isEmpty) {
+      if (type == 'hidden') {
+        prefilled = asString(settings['value']) ?? prefilled;
+      } else if (type == 'string' || type == 'phone') {
+        prefilled = asString(settings['defaultValue']) ?? prefilled;
+      }
+    }
+  }
   return DynamicStepInput(
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
-    type: asString(raw['type']) ?? '',
-    required: raw['required'] == true ||
-        settings['required'] == true ||
-        settings['required'] == 'true',
+    type: type,
+    required: _setting(raw['required']) || _setting(settings['required']),
     settings: raw['settings'],
-    choices: [
-      for (final item in asArray(raw['selectionList']))
-        DynamicChoice(
-          value: asString(asRecord(item)['value']) ?? '',
-          label: asString(asRecord(item)['label']) ?? '',
-        )
-    ],
+    choices: money
+        ? const []
+        : [
+            for (final item in asArray(raw['selectionList']))
+              DynamicChoice(
+                value: asString(asRecord(item)['value']) ?? '',
+                label: asString(asRecord(item)['label']) ?? '',
+              )
+          ],
     accessAttributes: accessAttributes,
+    value: prefilled,
+    amount: money ? _parseAmount(raw['value']) : null,
+    amountMode: money && '${settings['mode'] ?? ''}'.toUpperCase() == 'SELECT'
+        ? DynamicAmountMode.select
+        : DynamicAmountMode.input,
+    amountChoices: money
+        ? [
+            for (final item in asArray(raw['selectionList']))
+              if (_parseAmount(asRecord(item)['value']) case final amount?)
+                DynamicAmountChoice(
+                  label: asString(asRecord(item)['label']) ?? amount.text,
+                  amount: amount,
+                )
+          ]
+        : const [],
+    readonly: _setting(settings['readonly']) || _setting(raw['readOnly']),
+    ordinalNumber: asNumber(raw['ordinalNumber'])?.toInt(),
+    description: asString(raw['description']),
     raw: raw,
   );
 }
 
-/// Parses the `dynamic/operation/step` response.
+/// Parses the `dynamic/operation/step` response. Fields come in the order
+/// of their `ordinalNumber`; a response without a step is [DynamicStep.done].
 DynamicStep parseDynamicStep(Map<String, Object?> body) {
-  final raw = asRecord(body['currentStep']);
+  final value = body['currentStep'];
+  if (value is! Map) {
+    return DynamicStep(id: '', label: '', done: true, raw: body);
+  }
+  final raw = asRecord(value);
+  final inputs = [
+    for (final input in asArray(raw['inputs'])) _parseStepInput(input)
+  ];
+  // A stable sort, as the official app's comparator (no number counts as 0).
+  final order = {for (var i = 0; i < inputs.length; i++) inputs[i]: i};
+  inputs.sort((a, b) {
+    final byNumber = (a.ordinalNumber ?? 0).compareTo(b.ordinalNumber ?? 0);
+    return byNumber != 0 ? byNumber : order[a]!.compareTo(order[b]!);
+  });
   return DynamicStep(
     id: asString(raw['id']) ?? '',
     label: asString(raw['label']) ?? '',
-    inputs: [
-      for (final input in asArray(raw['inputs'])) _parseStepInput(input)
-    ],
+    inputs: inputs,
     raw: raw,
   );
 }
+
+/// Parses the `details` of a dynamic check or execution (and the
+/// `additionalData` of a cardless code).
+List<DynamicDetail> parseDynamicDetails(Object? value) => [
+      for (final item in asArray(value))
+        if (asRecord(item) case final raw when raw.isNotEmpty)
+          DynamicDetail(
+            id: asString(raw['id']) ?? '',
+            label: asString(raw['label']) ?? '',
+            type: asString(raw['type']) ?? '',
+            text: asString(raw['type']) == 'money'
+                ? null
+                : (raw['value'] is bool
+                    ? '${raw['value']}'
+                    : asString(raw['value'])),
+            amount: asString(raw['type']) == 'money'
+                ? _parseAmount(raw['value'])
+                : null,
+            raw: raw,
+          )
+    ];
 
 /// Parses the `dynamic/operation/check` response.
 DynamicCheckResult parseDynamicCheck(Map<String, Object?> body) =>
@@ -358,6 +440,7 @@ DynamicCheckResult parseDynamicCheck(Map<String, Object?> body) =>
       fee: asNumber(body['fee'])?.toDouble(),
       currency: asString(body['currency']),
       planDate: asString(body['planDate']),
+      details: parseDynamicDetails(body['details']),
       raw: body,
     );
 
@@ -369,6 +452,10 @@ DynamicExecResult parseDynamicExec(Map<String, Object?> body) =>
       recentOpType: asString(body['recentOpType']),
       authid: asString(body['authid']),
       confirmationType: asString(asRecord(body['confirmReq'])['type']),
+      status: asString(asRecord(body['operationStatus'])['type']),
+      fee: asNumber(body['fee'])?.toDouble(),
+      currency: asString(body['currency']),
+      details: parseDynamicDetails(body['details']),
       raw: body,
     );
 
@@ -380,3 +467,110 @@ DynamicCompleteResult parseDynamicComplete(Map<String, Object?> body) =>
       authid: asString(body['authid']),
       raw: body,
     );
+
+CardlessInput _parseCardlessInput(Object? value) {
+  final raw = asRecord(value);
+  final settings = asRecord(raw['settings']);
+  return CardlessInput(
+    id: asString(raw['id']) ?? '',
+    label: asString(raw['label']) ?? '',
+    type: asString(raw['type']) ?? '',
+    description: asString(raw['description']),
+    required: _setting(raw['required']) || _setting(settings['required']),
+    readonly: _setting(raw['readOnly']) || _setting(settings['readonly']),
+    value: asString(raw['value']) ?? asString(settings['value']),
+    stereotype: asString(raw['stereotype']),
+    pattern: asString(raw['pattern']),
+    future: _setting(raw['future']),
+    choices: [
+      for (final item in asArray(raw['selectionList']))
+        DynamicChoice(
+          value: asString(asRecord(item)['value']) ?? '',
+          label: asString(asRecord(item)['label']) ?? '',
+        )
+    ],
+    raw: raw,
+  );
+}
+
+/// Parses the `operations/cardless/inputs` response.
+CardlessForm parseCardlessForm(Map<String, Object?> body) => CardlessForm(
+      inputs: [
+        for (final item in asArray(body['inputs'])) _parseCardlessInput(item)
+      ],
+      raw: body,
+    );
+
+/// Parses one cardless operation.
+CardlessCode parseCardlessCode(Map<String, Object?> raw) => CardlessCode(
+      id: asString(raw['id']) ?? '',
+      code: asString(raw['code']),
+      amount: asNumber(raw['amount'])?.toDouble(),
+      currency: asString(raw['currency']),
+      status: asString(raw['status']),
+      details: parseDynamicDetails(raw['additionalData']),
+      raw: raw,
+    );
+
+/// Parses the `operations/cardless/list` response.
+List<CardlessCode> parseCardlessCodes(Map<String, Object?> body) => [
+      for (final item in asArray(body['operations']))
+        if (asRecord(item) case final raw when raw.isNotEmpty)
+          parseCardlessCode(raw)
+    ];
+
+/// Date pattern of the cardless expiry field.
+const String defaultCardlessDatePattern = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+
+/// Formats [date] in Algeria time (UTC+1) with a Java date [pattern]:
+/// `yyyy`, `MM`, `dd`, `HH`, `mm`, `ss`, `SSS`, an offset (`XXX`, `Z`) and
+/// quoted literals.
+String formatDatePattern(DateTime date, String pattern) {
+  final local = date.toUtc().add(_algeriaOffset);
+  String pad(int value, int width) => value.toString().padLeft(width, '0');
+  final out = StringBuffer();
+  var i = 0;
+  while (i < pattern.length) {
+    final letter = pattern[i];
+    if (letter == "'") {
+      final end = pattern.indexOf("'", i + 1);
+      if (end < 0) {
+        out.write(pattern.substring(i + 1));
+        break;
+      }
+      out.write(end == i + 1 ? "'" : pattern.substring(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    var j = i;
+    while (j < pattern.length && pattern[j] == letter) {
+      j++;
+    }
+    final width = j - i;
+    switch (letter) {
+      case 'y':
+        out.write(
+            width == 2 ? pad(local.year % 100, 2) : pad(local.year, width));
+      case 'M':
+        out.write(pad(local.month, width));
+      case 'd':
+        out.write(pad(local.day, width));
+      case 'H':
+        out.write(pad(local.hour, width));
+      case 'm':
+        out.write(pad(local.minute, width));
+      case 's':
+        out.write(pad(local.second, width));
+      case 'S':
+        out.write(pad(local.millisecond, width));
+      case 'X':
+        out.write(width == 1 ? '+01' : (width == 2 ? '+0100' : '+01:00'));
+      case 'Z':
+        out.write(width >= 5 ? '+01:00' : '+0100');
+      default:
+        out.write(pattern.substring(i, j));
+    }
+    i = j;
+  }
+  return out.toString();
+}

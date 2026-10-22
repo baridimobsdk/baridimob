@@ -7,16 +7,28 @@ export class BaridiMobError extends Error {
   }
 }
 
+// What BaridiMob said about a refusal, in the session's language.
+function describe(raw: Record<string, unknown>): string | null {
+  const value = raw['description'];
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  return text === '' ? null : text;
+}
+
 export class ApiResultError extends BaridiMobError {
   readonly resultCode: number;
   readonly resultName: string;
   readonly raw: Record<string, unknown>;
+  readonly description: string | null;
 
   constructor(resultCode: number, raw: Record<string, unknown>, message?: string) {
-    super(message ?? `BaridiMob result ${resultCode} (${resultNameFor(resultCode)})`);
+    super(
+      message ?? describe(raw) ?? `BaridiMob result ${resultCode} (${resultNameFor(resultCode)})`,
+    );
     this.resultCode = resultCode;
     this.resultName = resultNameFor(resultCode);
     this.raw = raw;
+    this.description = describe(raw);
   }
 }
 
@@ -99,7 +111,7 @@ export class DeviceFlowError extends BaridiMobError {}
 
 export class ServerError extends ApiResultError {
   constructor(resultCode: number, raw: Record<string, unknown>, message?: string) {
-    super(resultCode, raw, message ?? 'BaridiMob server error');
+    super(resultCode, raw, message ?? describe(raw) ?? 'BaridiMob server error');
   }
 }
 

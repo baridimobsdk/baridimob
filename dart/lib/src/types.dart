@@ -785,6 +785,71 @@ class DynamicOperationInfo {
   final Map<String, Object?> raw;
 }
 
+/// An amount as BaridiMob writes it in a dynamic form.
+class DynamicAmount {
+  /// Creates an amount.
+  const DynamicAmount({required this.text, this.currency});
+
+  /// The amount as the server wrote it, for example `1500.00`. It is sent
+  /// back unchanged.
+  final String text;
+
+  /// Its currency, for example `DZD`, when the server gives one.
+  final String? currency;
+
+  /// The amount as a number, or `null` when [text] is not one.
+  double? get value => double.tryParse(text.trim().replaceAll(',', '.'));
+}
+
+/// How a `money` field is filled.
+enum DynamicAmountMode {
+  /// The user types the amount.
+  input,
+
+  /// The user picks one of [DynamicStepInput.amountChoices], for example
+  /// the amount of a bill.
+  select,
+}
+
+/// One amount offered by a `money` field in [DynamicAmountMode.select].
+class DynamicAmountChoice {
+  /// Creates a choice.
+  const DynamicAmountChoice({required this.label, required this.amount});
+
+  /// Label shown to the user.
+  final String label;
+
+  /// The amount.
+  final DynamicAmount amount;
+}
+
+/// Where a dynamic payment takes the money from.
+///
+/// Dynamic operations name the source by type: a card is `CLIENT_CARD_ID`,
+/// an account `ACCOUNT_NUMBER`. They do not accept the `1`/`2` of
+/// `payments.check` (BaridiMob answers result 2).
+class DynamicSource {
+  const DynamicSource._(this.id, this.type);
+
+  /// A card, by its id ([BaridiMobCard.id]).
+  const DynamicSource.card(String id) : this._(id, cardType);
+
+  /// An account, by its number.
+  const DynamicSource.account(String number) : this._(number, accountType);
+
+  /// Type of a card source.
+  static const String cardType = 'CLIENT_CARD_ID';
+
+  /// Type of an account source.
+  static const String accountType = 'ACCOUNT_NUMBER';
+
+  /// Card id or account number.
+  final String id;
+
+  /// Source type sent to BaridiMob.
+  final String type;
+}
+
 /// A field of a dynamic form step.
 class DynamicStepInput {
   /// Creates a field.
@@ -796,6 +861,13 @@ class DynamicStepInput {
     this.settings,
     this.choices = const [],
     this.accessAttributes = const [],
+    this.value,
+    this.amount,
+    this.amountMode = DynamicAmountMode.input,
+    this.amountChoices = const [],
+    this.readonly = false,
+    this.ordinalNumber,
+    this.description,
     this.raw = const {},
   });
 
@@ -805,7 +877,8 @@ class DynamicStepInput {
   /// Field label.
   final String label;
 
-  /// Field type, for example `phone`, `source_storage`, `select`, `money`.
+  /// Field type, for example `string`, `phone`, `hidden`, `source_storage`,
+  /// `select`, `money`.
   final String type;
 
   /// Whether the field must be filled.
@@ -820,8 +893,117 @@ class DynamicStepInput {
   /// Access attributes, for example `payment_source`.
   final List<String> accessAttributes;
 
+  /// What BaridiMob already filled in, read like the official app: `value`,
+  /// else `settings.value` for a `hidden` field, else
+  /// `settings.defaultValue` for `string` and `phone`. Amounts are in
+  /// [amount].
+  final String? value;
+
+  /// The amount BaridiMob filled in a `money` field, for example the amount
+  /// of a bill.
+  final DynamicAmount? amount;
+
+  /// Whether a `money` field is typed or picked from [amountChoices].
+  final DynamicAmountMode amountMode;
+
+  /// Amounts a `money` field offers in [DynamicAmountMode.select].
+  final List<DynamicAmountChoice> amountChoices;
+
+  /// Shown but not editable. Its value is still sent.
+  final bool readonly;
+
+  /// Position of the field in the form.
+  final int? ordinalNumber;
+
+  /// Help text.
+  final String? description;
+
   /// Raw server data.
   final Map<String, Object?> raw;
+
+  /// Whether the field is hidden: never shown, always sent.
+  bool get isHidden => type == 'hidden';
+
+  /// Whether the field is the payment source.
+  bool get isSource => type == 'source_storage';
+
+  /// Whether the field is an amount.
+  bool get isMoney => type == 'money';
+
+  /// Whether the field is a choice.
+  bool get isSelect => type == 'select';
+
+  /// A setting as text, for example `setting('amountKey')`.
+  String? setting(String key) {
+    final all = settings;
+    if (all is! Map) return null;
+    final value = all[key];
+    if (value is String) return value;
+    if (value is num || value is bool) return '$value';
+    return null;
+  }
+
+  String _key(String name, String fallback) {
+    final key = setting(name);
+    return key == null || key.isEmpty ? fallback : key;
+  }
+
+  /// The values this field sends, built like the official app:
+  ///
+  /// * `hidden`: its [value], even when empty.
+  /// * `source_storage`: the [source] under the `idKey` and `typeKey`
+  ///   settings.
+  /// * `money`: an [amount] (or the amount [entered] as text, or the one
+  ///   BaridiMob filled) under `amountKey`, with its currency under
+  ///   `currencyKey`.
+  /// * other fields: what the user [entered], else the prefilled [value];
+  ///   nothing when empty. A [readonly] field keeps BaridiMob's value.
+  ///
+  /// Fields of an unknown type send nothing, as in the official app.
+  Map<String, String> valuesFor({
+    String? entered,
+    DynamicSource? source,
+    DynamicAmount? amount,
+  }) {
+    switch (type) {
+      case 'hidden':
+        return {id: value ?? ''};
+      case 'source_storage':
+        if (source == null) return const {};
+        return {
+          _key('idKey', 'sourceId'): source.id,
+          _key('typeKey', 'sourceType'): source.type,
+        };
+      case 'money':
+        final typed = entered?.trim();
+        final chosen = readonly
+            ? this.amount
+            : amount ??
+                (typed != null && typed.isNotEmpty
+                    ? DynamicAmount(text: typed)
+                    : this.amount);
+        if (chosen == null || chosen.text.trim().isEmpty) return const {};
+        return {
+          _key('amountKey', 'amount'): chosen.text.trim(),
+          _key('currencyKey', 'currency'): chosen.currency ??
+              this.amount?.currency ??
+              setting('defaultCurrency') ??
+              'DZD',
+        };
+      case 'string':
+      case 'phone':
+      case 'text':
+      case 'email':
+      case 'select':
+      case 'datetime':
+      case 'monthyear':
+        final text = readonly ? value : (entered ?? value);
+        if (text == null || text.isEmpty) return const {};
+        return {id: text};
+      default:
+        return const {};
+    }
+  }
 }
 
 /// One choice of a dynamic select field.
@@ -839,20 +1021,76 @@ class DynamicChoice {
 /// A step of a dynamic form.
 class DynamicStep {
   /// Creates a step.
-  const DynamicStep(
-      {required this.id,
-      required this.label,
-      this.inputs = const [],
-      this.raw = const {}});
+  const DynamicStep({
+    required this.id,
+    required this.label,
+    this.inputs = const [],
+    this.done = false,
+    this.raw = const {},
+  });
 
-  /// Step id.
+  /// Step id: send it as `currentStepKey` with the values of this step.
   final String id;
 
   /// Step label.
   final String label;
 
-  /// Fields of this step.
+  /// Fields of this step, in the order of their `ordinalNumber`.
   final List<DynamicStepInput> inputs;
+
+  /// True when BaridiMob sent no further step: the form is complete, call
+  /// `check` with every value so far.
+  final bool done;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  /// The values to send for this step, built like the official app (see
+  /// [DynamicStepInput.valuesFor]): what the user [entered] (field id →
+  /// text or chosen value), the payment [source] and an [amount]. Add them
+  /// to the values of the earlier steps.
+  Map<String, String> values({
+    Map<String, String> entered = const {},
+    DynamicSource? source,
+    DynamicAmount? amount,
+  }) =>
+      {
+        for (final input in inputs)
+          ...input.valuesFor(
+            entered: entered[input.id],
+            source: source,
+            amount: amount,
+          ),
+      };
+}
+
+/// A piece of information BaridiMob returns about an operation, for a bill
+/// the subscriber, the bill number or the amount due.
+class DynamicDetail {
+  /// Creates a detail.
+  const DynamicDetail({
+    required this.id,
+    required this.label,
+    required this.type,
+    this.text,
+    this.amount,
+    this.raw = const {},
+  });
+
+  /// Detail id.
+  final String id;
+
+  /// Label shown to the user.
+  final String label;
+
+  /// Type: `string`, `money`, `datetime`, `boolean`…
+  final String type;
+
+  /// The value as text, for every type but `money`.
+  final String? text;
+
+  /// The value of a `money` detail.
+  final DynamicAmount? amount;
 
   /// Raw server data.
   final Map<String, Object?> raw;
@@ -868,6 +1106,7 @@ class DynamicCheckResult {
     this.fee,
     this.currency,
     this.planDate,
+    this.details = const [],
     this.raw = const {},
   });
 
@@ -886,8 +1125,20 @@ class DynamicCheckResult {
   /// Planned execution date, when the server gives one.
   final String? planDate;
 
+  /// What BaridiMob says about the operation (for a bill: subscriber, bill,
+  /// amount due).
+  final List<DynamicDetail> details;
+
   /// Raw server data.
   final Map<String, Object?> raw;
+
+  /// The first amount among [details], when there is one.
+  DynamicAmount? get amount {
+    for (final detail in details) {
+      if (detail.amount != null) return detail.amount;
+    }
+    return null;
+  }
 }
 
 /// The result of `dynamic.exec()`.
@@ -899,6 +1150,10 @@ class DynamicExecResult {
     this.recentOpType,
     this.authid,
     this.confirmationType,
+    this.status,
+    this.fee,
+    this.currency,
+    this.details = const [],
     this.raw = const {},
   });
 
@@ -916,6 +1171,18 @@ class DynamicExecResult {
 
   /// Further confirmation method, if the server asks for one.
   final String? confirmationType;
+
+  /// Status of the operation, for example `COMPLETED`.
+  final String? status;
+
+  /// Fee charged, if any.
+  final double? fee;
+
+  /// Fee currency.
+  final String? currency;
+
+  /// What BaridiMob says about the executed operation.
+  final List<DynamicDetail> details;
 
   /// Raw server data.
   final Map<String, Object?> raw;
@@ -939,6 +1206,139 @@ class DynamicCompleteResult {
 
   /// Authentication id, when present.
   final String? authid;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// A field of the form of a new cardless withdrawal code.
+class CardlessInput {
+  /// Creates a field.
+  const CardlessInput({
+    required this.id,
+    required this.label,
+    required this.type,
+    this.description,
+    this.required = false,
+    this.readonly = false,
+    this.value,
+    this.stereotype,
+    this.pattern,
+    this.future = false,
+    this.choices = const [],
+    this.raw = const {},
+  });
+
+  /// Field id, sent as `param.<id>`.
+  final String id;
+
+  /// Field label.
+  final String label;
+
+  /// Field type: `select`, `datetime`, `hidden`…
+  final String type;
+
+  /// Help text.
+  final String? description;
+
+  /// Whether the field must be filled.
+  final bool required;
+
+  /// Shown but not editable.
+  final bool readonly;
+
+  /// What BaridiMob filled in, for example the signed `mb_model` of a
+  /// hidden field. Hidden values are sent back unchanged.
+  final String? value;
+
+  /// Stereotype; a blank hidden value with `deviceId`, `devicePublicKey` or
+  /// `devicePublicKeyAlgorithm` takes this device's data.
+  final String? stereotype;
+
+  /// Date pattern of a `datetime` field, for example
+  /// `yyyy-MM-dd'T'HH:mm:ss.SSSXXX`.
+  final String? pattern;
+
+  /// Whether a `datetime` field must be in the future.
+  final bool future;
+
+  /// Choices of a `select` field.
+  final List<DynamicChoice> choices;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+}
+
+/// The form of a new cardless withdrawal code, as BaridiMob sends it.
+class CardlessForm {
+  /// Creates a form.
+  const CardlessForm({this.inputs = const [], this.raw = const {}});
+
+  /// Fields of the form.
+  final List<CardlessInput> inputs;
+
+  /// Raw server data.
+  final Map<String, Object?> raw;
+
+  /// Kinds of withdrawal offered, for example `ATM_CASHWITHDRAWAL`.
+  List<DynamicChoice> get types {
+    for (final input in inputs) {
+      if (input.type == 'select' && input.choices.isNotEmpty) {
+        return input.choices;
+      }
+    }
+    return const [];
+  }
+}
+
+/// Where a cardless withdrawal takes the money from.
+class CardlessSource {
+  const CardlessSource._(this.id, this.isCard);
+
+  /// An account, by its id ([Account.id]).
+  const CardlessSource.account(String id) : this._(id, false);
+
+  /// A card, by its id ([BaridiMobCard.id]).
+  const CardlessSource.card(String id) : this._(id, true);
+
+  /// Account or card id.
+  final String id;
+
+  /// Whether the source is a card.
+  final bool isCard;
+}
+
+/// A cardless withdrawal code: what to type at an Algérie Poste ATM to take
+/// the cash without a card. Treat [code] like cash.
+class CardlessCode {
+  /// Creates a code.
+  const CardlessCode({
+    required this.id,
+    this.code,
+    this.amount,
+    this.currency,
+    this.status,
+    this.details = const [],
+    this.raw = const {},
+  });
+
+  /// Operation id, shown by BaridiMob as the authorisation number.
+  final String id;
+
+  /// The withdrawal code.
+  final String? code;
+
+  /// Amount to withdraw.
+  final double? amount;
+
+  /// Currency of [amount].
+  final String? currency;
+
+  /// Status, as BaridiMob words it.
+  final String? status;
+
+  /// Other information BaridiMob gives, for example the expiry date.
+  final List<DynamicDetail> details;
 
   /// Raw server data.
   final Map<String, Object?> raw;

@@ -26,6 +26,7 @@ Read your BaridiMob accounts, verify incoming payments, send transfers and pay b
 - [Verify an incoming payment](#verify-an-incoming-payment)
 - [Transfers](#transfers)
 - [Bill payments](#bill-payments)
+- [Withdrawals without a card](#withdrawals-without-a-card)
 - [Receipts and profile](#receipts-and-profile)
 - [Session storage](#session-storage)
 - [Configuration](#configuration)
@@ -212,40 +213,91 @@ bm.payments.exec(
 the payment source for `paymentCheck` (verified live); use a card.
 
 **Bills through the dynamic engine.** Some services (Algérie Télécom, ADE,
-SEAL, Sonelgaz, AADL…) return the form themselves:
+SEAL, Sonelgaz, AADL…) return the form themselves, step by step:
 
 ```python
+from baridimob import DynamicSource
+
 groups = bm.payments.dynamic.groups()
 operation = groups[0].operations[0]
+card = bm.cards.list()[0]
+source = DynamicSource.card(card.id)
 
-form = bm.payments.dynamic.step(operation.id)   # the first form
-values = {
-    "phone": "0600000000",
-    "sourceId": "card-scid",
-    "sourceType": "1",
-    "amount": "500",
-    "currency": "DZD",
-}
+# Fill each step until BaridiMob has none left (step.done). values() adds
+# what BaridiMob expects besides what is typed: hidden fields (for an
+# Algérie Télécom bill, billerServiceCode=FACTURE), the payment source and
+# the amount. Later steps send the current step id and every value so far.
+step = bm.payments.dynamic.step(operation.id)
+values = {}
+while not step.done:
+    values.update(step.values(entered={"customerNumber": "044395258"}, source=source))
+    step = bm.payments.dynamic.step(operation.id, values, step.id)
 
-# for a later step, send the current step id and everything filled so far
-# next_form = bm.payments.dynamic.step(operation.id, values, form.id)
-
+# check() moves no money and sends no SMS; for a bill, its details hold the
+# subscriber, the bill and the amount due.
 checked = bm.payments.dynamic.check(operation.id, values)
+for detail in checked.details:
+    print(detail.label, detail.amount.text if detail.amount else detail.text)
 bm.payments.dynamic.request_otp(checked.trans_ref)
-result = bm.payments.dynamic.exec(
-    operation.id, checked.trans_ref, "123456", values
-)
-print(result.recent_op_id, result.recent_op_type)
+result = bm.payments.dynamic.exec(operation.id, checked.trans_ref, "123456", values)
+print(result.recent_op_id, result.status)
 ```
 
+- **Payment source:** dynamic forms name it with `DynamicSource`
+  (`CLIENT_CARD_ID` for a card, `ACCOUNT_NUMBER` for an account). BaridiMob
+  answers result 2 to the `1`/`2` of `payments.check`.
+- **Amounts:** a `money` field may come filled (`input.amount`, a bill's amount
+  due) or offer amounts to pick (`input.amount_choices` when
+  `input.amount_mode == "select"`); pass the chosen one as
+  `values(amount=...)`. Read-only fields (`input.readonly`) keep BaridiMob's
+  value. Fields come in the order of their `ordinalNumber`.
+- **Refusals** carry BaridiMob's own words, for example
+  «لا توجد فواتير غير مدفوعة» (no unpaid bills): see
+  [Error handling](#error-handling).
+
 `check()` returns `DynamicCheckResult` (`trans_ref`, `confirmation_type`, `fee`,
-`plan_date`); `exec()` returns `DynamicExecResult`. `complete()` is for an
-extra confirmation step (such as 3D Secure) when the server asks for one.
+`plan_date`, `details`, `amount`); `exec()` returns `DynamicExecResult`
+(`recent_op_id`, `recent_op_type`, `status`, `details`). `complete()` is for
+an extra confirmation step (such as 3D Secure) when the server asks for one.
 Values are sent as `param.<id>`.
 
-> **Not yet verified live:** `check()`, `exec()` and `complete()` use the
-> endpoints of the official app, but their requests have not been tested against
-> the real server yet. `groups()`, `operation()` and `step()` are verified.
+`groups()`, `operation()`, `step()` and `check()` (an internet top-up with a
+card source) are verified against the live server. `exec()` and `complete()`
+use the endpoints of the official app but have not been executed live yet.
+
+## Withdrawals without a card
+
+A cardless code takes cash out of an Algérie Poste ATM without the card.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+from baridimob import CardlessSource
+
+# The codes not used yet.
+for code in bm.cardless.list():
+    print(code.code, code.amount, code.currency, code.id)
+
+account = bm.accounts.list()[0]
+code = bm.cardless.create(
+    amount=2000,
+    source=CardlessSource.account(account.id),  # or CardlessSource.card(card.id)
+    expires_at=datetime.now(timezone.utc) + timedelta(days=1),  # less than six months
+)
+print(code.code, code.id)  # id: the authorisation number
+
+# While it is unused, it can be deleted.
+bm.cardless.delete(code.id)
+```
+
+`create()` reads the form again each time (its hidden `mb_model` is signed per
+request) and is never retried automatically; the official app asks for no SMS
+code here. Treat `code` like cash. A naive `expires_at` is read as Algeria
+time.
+
+> **Partly verified live:** `form()` and `list()` are verified. `create()`
+> reached BaridiMob's balance check (an account without funds was refused with
+> «رصيد الحساب غير كافٍ»); `delete()` has not run against a real code yet.
 
 ## Receipts and profile
 
@@ -344,6 +396,10 @@ except NetworkError:
 | `NetworkError` / `TimeoutError` | Connection problem |
 | `ServerError` | The server returned an error |
 | `ApiResultError` | Any other server error. Inspect `result_code` and `result_name`. |
+
+When BaridiMob explains a refusal, the error message (`str(error)`) is its own
+words, in the session's language (for example «لا توجد فواتير غير مدفوعة»),
+also in `description`.
 
 ## Security
 
