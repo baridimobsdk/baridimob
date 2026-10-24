@@ -59,7 +59,7 @@ from .parse import (
     to_date_param,
 )
 from .sign import INITIAL_STAMP, sign_json_body, sign_params
-from .storage import FileStorage, MemoryStorage
+from .storage import FileStorage, MemoryStorage, RedisStorage
 from .types import (
     Account,
     Card,
@@ -153,6 +153,7 @@ __all__ = [
     "Profile",
     "ProviderParam",
     "RecentOperation",
+    "RedisStorage",
     "RegistrationRequiredError",
     "ServerError",
     "SessionExpiredError",

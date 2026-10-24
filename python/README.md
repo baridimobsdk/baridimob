@@ -330,9 +330,35 @@ The storage keeps the device keys and session cookies between runs.
 |---------|----------|
 | `FileStorage(path)` | Scripts and servers: saved to a JSON file |
 | `MemoryStorage()` | Tests and short-lived processes: lost when the process stops |
-| Your own | Database, Redis, secret manager… |
+| `RedisStorage(...)` | Distributed environments, multi-worker servers, serverless: saved in Redis |
+| Your own | Database, secret manager… |
 
-To use your own storage, write a class with three methods (it follows the `SessionStorage` protocol):
+### Using Redis storage
+
+Install with the optional `redis` extra:
+
+```bash
+pip install "baridimob[redis]"
+```
+
+Pass a Redis URL or an existing `redis.Redis` instance:
+
+```python
+from datetime import timedelta
+from baridimob import Config, RedisStorage, create_client
+
+# Using a connection URL with optional key prefix and TTL
+storage = RedisStorage("redis://localhost:6379/0", prefix="baridimob:session:", ttl=timedelta(days=7))
+
+# Or using an existing redis client instance
+# import redis
+# client = redis.Redis.from_url("redis://localhost:6379/0")
+# storage = RedisStorage(redis_client=client)
+
+bm = create_client(Config(storage=storage))
+```
+
+To use your own custom storage, write a class with three methods (it follows the `SessionStorage` protocol):
 
 ```python
 from baridimob import SessionStorage, StoredSession

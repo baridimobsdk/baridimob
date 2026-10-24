@@ -13,6 +13,16 @@ authors = [{ name = "BaridiMob SDK contributors" }]
 keywords = ["baridimob", "algerie-poste", "ccp", "payment", "sdk", "algeria"]
 dependencies = ["httpx>=0.27", "cryptography>=42"]
 
+[project.optional-dependencies]
+redis = ["redis>=5.0.0"]
+test = [
+    "pytest>=8.0.0",
+    "fakeredis>=2.20.0",
+]
+dev = [
+    "baridimob[redis,test]",
+]
+
 [project.urls]
 Homepage = "https://github.com/baridimobsdk/baridimob"
 Repository = "https://github.com/baridimobsdk/baridimob"
