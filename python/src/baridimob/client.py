@@ -484,7 +484,7 @@ class _Auth:
         client._credentials = None
 
     def current_device_id(self) -> str | None:
-        session = self._client.session
+        session = self._client._load_session()
         return session.devid if session else None
 
 

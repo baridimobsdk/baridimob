@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 
 @dataclass
@@ -16,6 +16,7 @@ class StoredSession:
     account: str | None = None
 
 
+@runtime_checkable
 class SessionStorage(Protocol):
     def load(self) -> StoredSession | None: ...
 

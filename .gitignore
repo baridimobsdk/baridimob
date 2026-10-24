@@ -40,7 +40,6 @@ __pycache__/
 
 # Not published: tests, CI, internal notes and experiments
 typescript/test/
-python/tests/
 .github/
 docs/
 experiments/
